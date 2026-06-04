@@ -2040,7 +2040,10 @@ async function loadPostgresWorkspace(
     .order("created_at", { ascending: true });
 
   if (actionError) {
-    if (isMissingPostgresWorkspace(actionError)) return null;
+    if (isMissingPostgresWorkspace(actionError)) {
+      console.error("Postgres actions fallback", actionError);
+      return null;
+    }
     throw actionError;
   }
 
@@ -2072,7 +2075,10 @@ async function loadPostgresWorkspace(
     .order("created_at", { ascending: true });
 
   if (pipelineError) {
-    if (isMissingPostgresWorkspace(pipelineError)) return null;
+    if (isMissingPostgresWorkspace(pipelineError)) {
+      console.error("Postgres pipeline fallback", pipelineError);
+      return null;
+    }
     throw pipelineError;
   }
 
@@ -2104,7 +2110,10 @@ async function loadPostgresWorkspace(
     .select("dossier_id, body");
 
   if (noteError) {
-    if (isMissingPostgresWorkspace(noteError)) return null;
+    if (isMissingPostgresWorkspace(noteError)) {
+      console.error("Postgres notes fallback", noteError);
+      return null;
+    }
     throw noteError;
   }
 
