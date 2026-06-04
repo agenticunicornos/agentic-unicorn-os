@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "start": "vite --host 0.0.0.0"
+    "start": "vite --host 0.0.0.0",
+    "verify": "npm run build && npm audit --audit-level=moderate"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",

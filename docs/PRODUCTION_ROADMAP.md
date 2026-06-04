@@ -1,6 +1,6 @@
 # Production Roadmap
 
-Agentic Unicorn OS is moving from founder MVP to a globally usable SaaS product. This roadmap keeps the order strict: data foundation first, then collaboration, monetization, operations and compliance.
+Agentic Unicorn OS is moving from founder MVP to a globally usable product. This roadmap keeps the order strict: data foundation first, then collaboration, operations, compliance and global readiness. Billing and Stripe are intentionally out of scope.
 
 ## 1. Data Foundation
 
@@ -23,7 +23,7 @@ Required before broad public launch:
 
 ## 3. Reliability
 
-Required before paid users:
+Required before broad public usage:
 
 - End-to-end tests for signup, login, action CRUD, pipeline CRUD and notes.
 - Error reporting.
@@ -31,15 +31,15 @@ Required before paid users:
 - Database backups and restore drill.
 - Rate limits around auth and write-heavy actions.
 
-## 4. Commercial Layer
+## 4. Public Access Layer
 
-Required before public monetization:
+Required before broad no-billing launch:
 
-- Pricing page.
-- Stripe checkout.
-- Subscription status synced into Supabase.
-- Feature gates by plan.
-- Billing portal.
+- Clear public onboarding.
+- Account creation flow hardened against abuse.
+- Workspace limits enforced without payment logic or Stripe.
+- Invite-only or waitlist option for controlled rollout.
+- Admin-controlled access states: active, suspended, deleted.
 
 ## 5. Global Readiness
 

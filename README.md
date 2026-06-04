@@ -11,6 +11,7 @@ Production: [agentic-unicorn-os.netlify.app](https://agentic-unicorn-os.netlify.
 - React + TypeScript pour l'interface operator.
 - Supabase Auth pour les comptes utilisateurs.
 - Supabase Postgres + RLS comme backend scalable quand le schema est applique.
+- Organisations, roles, invitations et audit logs prepares dans le schema Supabase.
 - Supabase user metadata comme fallback de continuite tant que la migration SQL n'est pas appliquee.
 - Vite pour le build rapide.
 - Lucide React pour les icones produit.
@@ -27,6 +28,8 @@ Le schema SQL optionnel est dans `supabase/schema.sql` pour une evolution Postgr
 - `pipeline_items`: pipelines Podcasts, Investors, Offers, Acquirers, Consulting.
 - `dossier_notes`: notes personnelles par dossier.
 - `profiles`: profil lie a `auth.users`.
+- `organizations`, `organization_members`, `organization_invitations`: multi-tenant sans billing.
+- `audit_events`: trace des actions produit importantes.
 
 ## Securite
 
@@ -46,6 +49,12 @@ npm run dev
 ```
 
 Copier `.env.example` vers `.env.local`, renseigner Supabase, puis ouvrir `http://127.0.0.1:8000/`.
+
+Verifier avant publication:
+
+```bash
+npm run verify
+```
 
 ## Architecture du kit
 - `00-CEO-MASTERPLAN.md`: trajectoire 18 mois, gates et métriques de direction.

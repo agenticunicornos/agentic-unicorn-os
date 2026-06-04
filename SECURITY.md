@@ -5,6 +5,7 @@
 - Authentication is handled by Supabase Auth.
 - User workspaces are scoped to the signed-in Supabase user.
 - The application supports Postgres/RLS workspace persistence as the scalable primary backend when `supabase/schema.sql` is applied.
+- The schema includes organizations, members, invitations and audit events for multi-tenant control without a billing layer.
 - Supabase Auth metadata is kept only as a no-downtime fallback while the Postgres migration is not active.
 - The frontend only uses Supabase publishable keys.
 - No service-role key, private token, OAuth secret, or SSH private key is committed to the repository.
