@@ -41,7 +41,7 @@ import type { Session, User as SupabaseUser } from "@supabase/supabase-js";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { hasSupabaseConfig, supabase } from "./lib/supabase";
 
-type ViewId = "today" | "missions" | "pipelines" | "dossiers" | "team" | "brief";
+type ViewId = "today" | "missions" | "pipelines" | "dossiers" | "agent" | "team" | "brief";
 type MissionId = "product" | "distribution" | "capital" | "ma" | "consulting";
 type Tone = "mint" | "blue" | "amber" | "coral" | "lime";
 type AuthMode = "signin" | "signup";
@@ -49,6 +49,8 @@ type SyncState = "local" | "loading" | "ready" | "saving" | "error";
 type CloudMode = "metadata" | "postgres";
 type OrgRole = "owner" | "admin" | "member" | "viewer";
 type InviteStatus = "pending" | "accepted" | "revoked" | "expired";
+type AgentMode = "operator" | "pipeline" | "risk";
+type AgentStatus = "idle" | "running" | "error";
 
 type Mission = {
   id: MissionId;
@@ -196,6 +198,7 @@ const views: Array<{ id: ViewId; label: string; icon: ReactNode }> = [
   { id: "missions", label: "Missions", icon: <Layers3 /> },
   { id: "pipelines", label: "Pipelines", icon: <GitBranch /> },
   { id: "dossiers", label: "Dossiers", icon: <FileText /> },
+  { id: "agent", label: "Agent", icon: <Sparkles /> },
   { id: "team", label: "Team", icon: <Users /> },
   { id: "brief", label: "Brief", icon: <BookOpen /> }
 ];
@@ -421,6 +424,12 @@ export function App() {
   const [syncState, setSyncState] = useState<SyncState>(hasSupabaseConfig ? "loading" : "local");
   const [syncError, setSyncError] = useState("");
   const [cloudMode, setCloudMode] = useState<CloudMode>("metadata");
+  const [agentMode, setAgentMode] = useState<AgentMode>("operator");
+  const [agentPrompt, setAgentPrompt] = useState("Priorise les 3 actions les plus importantes maintenant.");
+  const [agentOutput, setAgentOutput] = useState("");
+  const [agentProvider, setAgentProvider] = useState("local");
+  const [agentStatus, setAgentStatus] = useState<AgentStatus>("idle");
+  const [agentError, setAgentError] = useState("");
 
   const user = session?.user ?? null;
   const isCloud = Boolean(user && supabase);
@@ -611,6 +620,47 @@ export function App() {
       ?.writeText(weeklyBrief())
       .then(() => flash("Brief copied"))
       .catch(() => flash("Clipboard unavailable"));
+  }
+
+  async function runAgent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !user) return;
+
+    setAgentStatus("running");
+    setAgentError("");
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Session expired");
+
+      const response = await fetch("/.netlify/functions/agent", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          mode: agentMode,
+          prompt: agentPrompt,
+          workspace: makeWorkspaceSnapshot()
+        })
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.message || payload.error || "Agent unavailable");
+      }
+
+      setAgentOutput(String(payload.answer ?? ""));
+      setAgentProvider(payload.local ? `${payload.provider} / local` : String(payload.provider ?? "llm"));
+      setAgentStatus("idle");
+      flash("Agent ready");
+    } catch (error) {
+      setAgentStatus("error");
+      setAgentError(readableError(error));
+      flash("Agent unavailable");
+    }
   }
 
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
@@ -1139,6 +1189,7 @@ export function App() {
       { title: "Missions", meta: "Strategic axes", icon: <Layers3 />, run: () => setView("missions") },
       { title: "Pipelines", meta: "Counterparties", icon: <GitBranch />, run: () => setView("pipelines") },
       { title: "Dossiers", meta: "Living docs", icon: <FileText />, run: () => setView("dossiers") },
+      { title: "Agent", meta: "LLM or local operator brain", icon: <Sparkles />, run: () => setView("agent") },
       { title: "Team", meta: "Workspace, roles, invitations", icon: <Users />, run: () => setView("team") },
       ...missions.map((item) => ({
         title: item.label,
@@ -1275,6 +1326,22 @@ export function App() {
               note={dossierNotes[dossier.id] ?? ""}
               onActive={setDossierId}
               onSaveNote={saveDossierNote}
+            />
+          )}
+          {view === "agent" && (
+            <AgentView
+              mode={agentMode}
+              prompt={agentPrompt}
+              provider={agentProvider}
+              status={agentStatus}
+              error={agentError}
+              output={agentOutput}
+              actions={actions}
+              pipelines={pipelineRows}
+              organization={organization}
+              onMode={setAgentMode}
+              onPrompt={setAgentPrompt}
+              onRun={runAgent}
             />
           )}
           {view === "team" && (
@@ -1837,6 +1904,109 @@ function DossiersView({
           </button>
         </form>
       </article>
+    </div>
+  );
+}
+
+function AgentView({
+  mode,
+  prompt,
+  provider,
+  status,
+  error,
+  output,
+  actions,
+  pipelines,
+  organization,
+  onMode,
+  onPrompt,
+  onRun
+}: {
+  mode: AgentMode;
+  prompt: string;
+  provider: string;
+  status: AgentStatus;
+  error: string;
+  output: string;
+  actions: Action[];
+  pipelines: Record<string, PipelineRow[]>;
+  organization: WorkspaceOrg;
+  onMode: (mode: AgentMode) => void;
+  onPrompt: (prompt: string) => void;
+  onRun: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const openActions = actions.filter((action) => !("done" in action) || !(action as WorkspaceAction).done);
+  const pipelineCount = Object.values(pipelines).reduce((total, rows) => total + rows.length, 0);
+  const modes: Array<{ id: AgentMode; label: string; icon: ReactNode }> = [
+    { id: "operator", label: "Operator", icon: <Sparkles /> },
+    { id: "pipeline", label: "Pipeline", icon: <GitBranch /> },
+    { id: "risk", label: "Risk", icon: <ShieldCheck /> }
+  ];
+
+  return (
+    <div className="agent-view">
+      <section className="agent-command">
+        <div className="agent-head">
+          <div>
+            <span className="section-label">
+              <Sparkles />
+              Agent
+            </span>
+            <h2>{organization.name}</h2>
+          </div>
+          <span className="agent-provider">{provider}</span>
+        </div>
+
+        <div className="agent-modes" role="tablist" aria-label="Agent mode">
+          {modes.map((item) => (
+            <button
+              key={item.id}
+              className={mode === item.id ? "agent-mode active" : "agent-mode"}
+              type="button"
+              onClick={() => onMode(item.id)}
+            >
+              {item.icon}
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+
+        <form className="agent-form" onSubmit={onRun}>
+          <textarea value={prompt} onChange={(event) => onPrompt(event.target.value)} rows={5} maxLength={1200} />
+          <button type="submit" disabled={status === "running"}>
+            <Sparkles />
+            {status === "running" ? "Thinking" : "Run agent"}
+          </button>
+        </form>
+
+        {error && <p className="agent-error">{error}</p>}
+      </section>
+
+      <section className="agent-context">
+        <div className="agent-stat">
+          <span>Actions</span>
+          <strong>{openActions.length}</strong>
+        </div>
+        <div className="agent-stat">
+          <span>Pipeline</span>
+          <strong>{pipelineCount}</strong>
+        </div>
+        <div className="agent-stat">
+          <span>Mode</span>
+          <strong>{mode}</strong>
+        </div>
+      </section>
+
+      <section className="agent-output">
+        {output ? (
+          <pre>{output}</pre>
+        ) : (
+          <div className="empty-state">
+            <Sparkles />
+            <p>Decision, plan, risks, next command.</p>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

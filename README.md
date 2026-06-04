@@ -16,6 +16,7 @@ Production: [agentic-unicorn-os.netlify.app](https://agentic-unicorn-os.netlify.
 - Vite pour le build rapide.
 - Lucide React pour les icones produit.
 - Netlify pour la production.
+- Netlify Functions pour l'agent LLM agnostique.
 - LocalStorage uniquement comme fallback local si Supabase n'est pas configure.
 
 ## Backend Supabase
@@ -40,6 +41,23 @@ La posture securite du projet est documentee dans [`SECURITY.md`](SECURITY.md).
 La roadmap pour passer du MVP au produit SaaS mondial est dans [`docs/PRODUCTION_ROADMAP.md`](docs/PRODUCTION_ROADMAP.md).
 
 La surface produit inclut maintenant une vue `Team` pour gerer workspace, membres, invitations et audit log sans couche Stripe.
+
+## Agent agnostique
+
+La vue `Agent` fonctionne en deux modes:
+
+- sans cle LLM: reponse locale deterministe basee sur les actions, pipelines et notes;
+- avec LLM: appel serveur authentifie depuis Netlify Functions.
+
+Providers supportes via variables Netlify:
+
+- `LLM_PROVIDER=local`: aucun appel externe.
+- `LLM_PROVIDER=openai` avec `OPENAI_API_KEY` ou `LLM_API_KEY`.
+- `LLM_PROVIDER=openrouter` avec `OPENROUTER_API_KEY` ou `LLM_API_KEY`.
+- `LLM_PROVIDER=custom` avec `LLM_BASE_URL`, `LLM_MODEL`, optionnellement `LLM_API_KEY` pour API compatible `/v1/chat/completions`.
+- `LLM_PROVIDER=ollama` avec `LLM_BASE_URL` pointant vers une instance Ollama reachable par Netlify.
+
+Aucune cle LLM ne doit etre exposee dans le frontend.
 
 ## App locale
 
