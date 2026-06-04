@@ -9,8 +9,9 @@ Production: [agentic-unicorn-os.netlify.app](https://agentic-unicorn-os.netlify.
 ## Stack produit
 
 - React + TypeScript pour l'interface operator.
-- Supabase Auth pour les comptes utilisateurs et le workspace cloud par utilisateur.
-- Supabase user metadata pour persister actions, pipelines et notes sans bloquer l'app sur une migration SQL.
+- Supabase Auth pour les comptes utilisateurs.
+- Supabase Postgres + RLS comme backend scalable quand le schema est applique.
+- Supabase user metadata comme fallback de continuite tant que la migration SQL n'est pas appliquee.
 - Vite pour le build rapide.
 - Lucide React pour les icones produit.
 - Netlify pour la production.
@@ -18,7 +19,7 @@ Production: [agentic-unicorn-os.netlify.app](https://agentic-unicorn-os.netlify.
 
 ## Backend Supabase
 
-La production utilise Supabase Auth et attache le workspace a l'utilisateur connecte.
+La production utilise Supabase Auth. L'app tente d'abord le stockage Postgres/RLS, puis bascule sur un fallback Auth metadata si le schema SQL n'est pas encore applique.
 
 Le schema SQL optionnel est dans `supabase/schema.sql` pour une evolution Postgres/RLS plus avancee:
 
@@ -30,6 +31,10 @@ Le schema SQL optionnel est dans `supabase/schema.sql` pour une evolution Postgr
 ## Securite
 
 La posture securite du projet est documentee dans [`SECURITY.md`](SECURITY.md).
+
+## Production scalable
+
+La roadmap pour passer du MVP au produit SaaS mondial est dans [`docs/PRODUCTION_ROADMAP.md`](docs/PRODUCTION_ROADMAP.md).
 
 ## App locale
 

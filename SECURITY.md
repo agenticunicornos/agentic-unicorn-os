@@ -4,6 +4,8 @@
 
 - Authentication is handled by Supabase Auth.
 - User workspaces are scoped to the signed-in Supabase user.
+- The application supports Postgres/RLS workspace persistence as the scalable primary backend when `supabase/schema.sql` is applied.
+- Supabase Auth metadata is kept only as a no-downtime fallback while the Postgres migration is not active.
 - The frontend only uses Supabase publishable keys.
 - No service-role key, private token, OAuth secret, or SSH private key is committed to the repository.
 - Local environment files are ignored through `.gitignore`.
@@ -20,4 +22,4 @@ Do not commit `.env.local`, `.env.production.local`, Netlify tokens, Supabase se
 
 ## Next hardening step
 
-For enterprise-grade multi-user data governance, move workspace records from Supabase Auth metadata into the Postgres tables described in `supabase/schema.sql`, with Row Level Security enabled per `auth.uid()`.
+For enterprise-grade multi-user data governance, run production in Postgres-only mode, add organization roles, audit logs, RLS tests and workspace export/delete controls.

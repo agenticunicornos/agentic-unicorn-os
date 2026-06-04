@@ -42,6 +42,7 @@ type MissionId = "product" | "distribution" | "capital" | "ma" | "consulting";
 type Tone = "mint" | "blue" | "amber" | "coral" | "lime";
 type AuthMode = "signin" | "signup";
 type SyncState = "local" | "loading" | "ready" | "saving" | "error";
+type CloudMode = "metadata" | "postgres";
 
 type Mission = {
   id: MissionId;
@@ -339,6 +340,7 @@ export function App() {
   const [authMessage, setAuthMessage] = useState("");
   const [syncState, setSyncState] = useState<SyncState>(hasSupabaseConfig ? "loading" : "local");
   const [syncError, setSyncError] = useState("");
+  const [cloudMode, setCloudMode] = useState<CloudMode>("metadata");
 
   const user = session?.user ?? null;
   const isCloud = Boolean(user && supabase);
@@ -405,17 +407,19 @@ export function App() {
       setSyncState("loading");
       setSyncError("");
       try {
-        const existing = normalizeWorkspace(currentUser.user_metadata?.auos_workspace);
+        const postgresWorkspace = await loadPostgresWorkspace(currentUser, db);
+        const existing = postgresWorkspace ?? normalizeWorkspace(currentUser.user_metadata?.auos_workspace);
         const workspace = existing ?? makeInitialWorkspace();
 
         if (cancelled) return;
 
+        setCloudMode(postgresWorkspace ? "postgres" : "metadata");
         setCloudActions(stripWorkspaceActions(workspace.actions));
         setDone(actionDoneMap(workspace.actions));
         setCloudPipelines(workspace.pipelines);
         setDossierNotes(workspace.notes);
 
-        if (!existing) {
+        if (!postgresWorkspace && !existing) {
           const { data, error } = await db.auth.updateUser({
             data: { auos_workspace: workspace }
           });
@@ -569,7 +573,35 @@ export function App() {
       due: "Today"
     };
 
-    if (isCloud && supabase && user) {
+    if (isCloud && supabase && user && cloudMode === "postgres") {
+      setSyncState("saving");
+      setSyncError("");
+      const { data: inserted, error } = await supabase
+        .from("operator_actions")
+        .insert({
+          user_id: user.id,
+          mission: draft.mission,
+          title: draft.title,
+          leverage: draft.leverage,
+          due: draft.due,
+          done: false
+        })
+        .select("id, mission, title, leverage, due, done")
+        .single();
+
+      if (error || !inserted) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Action not saved");
+        return;
+      }
+
+      const row = inserted as ActionRow;
+      setCloudActions((items) => [rowToAction(row), ...items]);
+      setDone((items) => ({ ...items, [row.id]: row.done }));
+      setSyncState("ready");
+      flash("Action saved");
+    } else if (isCloud && supabase && user) {
       const cloudDraft = { ...draft, id: makeId("action") };
       const nextActions = [cloudDraft, ...cloudActions];
       const nextDone = { ...done, [cloudDraft.id]: false };
@@ -593,7 +625,24 @@ export function App() {
     const nextDone = { ...done, [id]: nextValue };
     setDone(nextDone);
 
-    if (isCloud && supabase) {
+    if (isCloud && supabase && cloudMode === "postgres") {
+      setSyncState("saving");
+      setSyncError("");
+      const { error } = await supabase
+        .from("operator_actions")
+        .update({ done: nextValue })
+        .eq("id", id);
+
+      if (error) {
+        setDone(done);
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Action not synced");
+        return;
+      }
+
+      setSyncState("ready");
+    } else if (isCloud && supabase) {
       const synced = await persistWorkspace(makeWorkspaceSnapshot(cloudActions, nextDone));
       if (!synced) {
         setDone(done);
@@ -602,6 +651,33 @@ export function App() {
   }
 
   async function updateAction(nextAction: Action) {
+    if (isCloud && supabase && cloudMode === "postgres") {
+      setSyncState("saving");
+      setSyncError("");
+      const { error } = await supabase
+        .from("operator_actions")
+        .update({
+          mission: nextAction.mission,
+          title: nextAction.title,
+          leverage: nextAction.leverage,
+          due: nextAction.due
+        })
+        .eq("id", nextAction.id);
+
+      if (error) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Action not updated");
+        return;
+      }
+
+      const nextActions = cloudActions.map((item) => (item.id === nextAction.id ? nextAction : item));
+      setCloudActions(nextActions);
+      setSyncState("ready");
+      flash("Action updated");
+      return;
+    }
+
     if (isCloud && supabase) {
       const nextActions = cloudActions.map((item) => (item.id === nextAction.id ? nextAction : item));
       setCloudActions(nextActions);
@@ -616,6 +692,28 @@ export function App() {
   }
 
   async function deleteAction(id: string) {
+    if (isCloud && supabase && cloudMode === "postgres") {
+      setSyncState("saving");
+      setSyncError("");
+      const { error } = await supabase.from("operator_actions").delete().eq("id", id);
+
+      if (error) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Action not deleted");
+        return;
+      }
+
+      const nextActions = cloudActions.filter((item) => item.id !== id);
+      const nextDone = removeRecordKey(done, id);
+
+      setCloudActions(nextActions);
+      setDone(nextDone);
+      setSyncState("ready");
+      flash("Action deleted");
+      return;
+    }
+
     if (isCloud && supabase) {
       const nextActions = cloudActions.filter((item) => item.id !== id);
       const nextDone = removeRecordKey(done, id);
@@ -653,7 +751,37 @@ export function App() {
       signal
     };
 
-    if (isCloud && supabase && user) {
+    if (isCloud && supabase && user && cloudMode === "postgres") {
+      setSyncState("saving");
+      setSyncError("");
+      const { data: inserted, error } = await supabase
+        .from("pipeline_items")
+        .insert({
+          user_id: user.id,
+          lane: pipeline,
+          name,
+          counterparty,
+          next_step: next,
+          signal
+        })
+        .select("id, lane, name, counterparty, next_step, signal")
+        .single();
+
+      if (error || !inserted) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Pipeline item not saved");
+        return;
+      }
+
+      const row = pipelineRowFromDb(inserted as PipelineItemRow);
+      setCloudPipelines((items) => ({
+        ...items,
+        [row.lane]: [row, ...(items[row.lane] ?? [])]
+      }));
+      setSyncState("ready");
+      flash("Pipeline saved");
+    } else if (isCloud && supabase && user) {
       const cloudDraft = { ...draft, id: makeId("pipeline") };
       const nextPipelines = {
         ...cloudPipelines,
@@ -677,6 +805,34 @@ export function App() {
   }
 
   async function updatePipelineItem(nextRow: PipelineRow) {
+    if (isCloud && supabase && cloudMode === "postgres") {
+      setSyncState("saving");
+      setSyncError("");
+      const { error } = await supabase
+        .from("pipeline_items")
+        .update({
+          lane: nextRow.lane,
+          name: nextRow.name,
+          counterparty: nextRow.counterparty,
+          next_step: nextRow.next,
+          signal: nextRow.signal
+        })
+        .eq("id", nextRow.id);
+
+      if (error) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Pipeline item not updated");
+        return;
+      }
+
+      const nextPipelines = replacePipelineRow(cloudPipelines, nextRow);
+      setCloudPipelines(nextPipelines);
+      setSyncState("ready");
+      flash("Pipeline updated");
+      return;
+    }
+
     if (isCloud && supabase) {
       const nextPipelines = replacePipelineRow(cloudPipelines, nextRow);
       setCloudPipelines(nextPipelines);
@@ -691,6 +847,25 @@ export function App() {
   }
 
   async function deletePipelineItem(row: PipelineRow) {
+    if (isCloud && supabase && cloudMode === "postgres") {
+      setSyncState("saving");
+      setSyncError("");
+      const { error } = await supabase.from("pipeline_items").delete().eq("id", row.id);
+
+      if (error) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Pipeline item not deleted");
+        return;
+      }
+
+      const nextPipelines = removePipelineRow(cloudPipelines, row);
+      setCloudPipelines(nextPipelines);
+      setSyncState("ready");
+      flash("Pipeline deleted");
+      return;
+    }
+
     if (isCloud && supabase) {
       const nextPipelines = removePipelineRow(cloudPipelines, row);
       setCloudPipelines(nextPipelines);
@@ -708,7 +883,30 @@ export function App() {
     const nextNotes = { ...dossierNotes, [dossierKey]: body };
     setDossierNotes(nextNotes);
 
-    if (isCloud && supabase && user) {
+    if (isCloud && supabase && user && cloudMode === "postgres") {
+      setSyncState("saving");
+      setSyncError("");
+      const { error } = await supabase
+        .from("dossier_notes")
+        .upsert(
+          {
+            user_id: user.id,
+            dossier_id: dossierKey,
+            body
+          },
+          { onConflict: "user_id,dossier_id" }
+        );
+
+      if (error) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Note not synced");
+        return;
+      }
+
+      setSyncState("ready");
+      flash("Note saved");
+    } else if (isCloud && supabase && user) {
       if (await persistWorkspace(makeWorkspaceSnapshot(cloudActions, done, cloudPipelines, nextNotes))) {
         flash("Note saved");
       }
@@ -1483,6 +1681,93 @@ function Intel({ icon, title, copy }: { icon: ReactNode; title: string; copy: st
   );
 }
 
+async function loadPostgresWorkspace(
+  currentUser: SupabaseUser,
+  db: NonNullable<typeof supabase>
+): Promise<CloudWorkspace | null> {
+  let { data: actionData, error: actionError } = await db
+    .from("operator_actions")
+    .select("id, mission, title, leverage, due, done")
+    .order("created_at", { ascending: true });
+
+  if (actionError) {
+    if (isMissingPostgresWorkspace(actionError)) return null;
+    throw actionError;
+  }
+
+  let actionRows = (actionData ?? []) as ActionRow[];
+  if (actionRows.length === 0) {
+    const inserts = seedActions.map((action) => ({
+      user_id: currentUser.id,
+      seed_key: action.id,
+      mission: action.mission,
+      title: action.title,
+      leverage: action.leverage,
+      due: action.due,
+      done: false
+    }));
+
+    const seeded = await db
+      .from("operator_actions")
+      .insert(inserts)
+      .select("id, mission, title, leverage, due, done")
+      .order("created_at", { ascending: true });
+
+    if (seeded.error) throw seeded.error;
+    actionRows = (seeded.data ?? []) as ActionRow[];
+  }
+
+  let { data: pipelineData, error: pipelineError } = await db
+    .from("pipeline_items")
+    .select("id, lane, name, counterparty, next_step, signal")
+    .order("created_at", { ascending: true });
+
+  if (pipelineError) {
+    if (isMissingPostgresWorkspace(pipelineError)) return null;
+    throw pipelineError;
+  }
+
+  let pipelineItems = (pipelineData ?? []) as PipelineItemRow[];
+  if (pipelineItems.length === 0) {
+    const inserts = Object.entries(pipelineSeeds).flatMap(([lane, rows]) =>
+      rows.map((row) => ({
+        user_id: currentUser.id,
+        lane,
+        name: row.name,
+        counterparty: row.counterparty,
+        next_step: row.next,
+        signal: row.signal
+      }))
+    );
+
+    const seeded = await db
+      .from("pipeline_items")
+      .insert(inserts)
+      .select("id, lane, name, counterparty, next_step, signal")
+      .order("created_at", { ascending: true });
+
+    if (seeded.error) throw seeded.error;
+    pipelineItems = (seeded.data ?? []) as PipelineItemRow[];
+  }
+
+  const { data: noteData, error: noteError } = await db
+    .from("dossier_notes")
+    .select("dossier_id, body");
+
+  if (noteError) {
+    if (isMissingPostgresWorkspace(noteError)) return null;
+    throw noteError;
+  }
+
+  return {
+    version: 1,
+    actions: actionRows.map((row) => ({ ...rowToAction(row), done: row.done })),
+    pipelines: groupPipelineRows(pipelineItems),
+    notes: Object.fromEntries(((noteData ?? []) as DossierNoteRow[]).map((note) => [note.dossier_id, note.body])),
+    updatedAt: new Date().toISOString()
+  };
+}
+
 function makeInitialWorkspace(): CloudWorkspace {
   return {
     version: 1,
@@ -1652,6 +1937,14 @@ function readableError(error: unknown) {
     return String((error as { message?: unknown }).message ?? "Database action failed.");
   }
   return "Database action failed.";
+}
+
+function isMissingPostgresWorkspace(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  const code = String(candidate.code ?? "");
+  const message = String(candidate.message ?? "").toLowerCase();
+  return code === "42P01" || message.includes("does not exist") || message.includes("schema cache");
 }
 
 function stateLabel(state: SyncState) {
