@@ -20,6 +20,7 @@ import {
   LineChart,
   Lock,
   LogOut,
+  Pencil,
   Plus,
   Rocket,
   Save,
@@ -28,6 +29,7 @@ import {
   Sparkles,
   Target,
   Timer,
+  Trash2,
   User,
   X
 } from "lucide-react";
@@ -324,6 +326,7 @@ export function App() {
   const [authLoading, setAuthLoading] = useState(hasSupabaseConfig);
   const [authMessage, setAuthMessage] = useState("");
   const [syncState, setSyncState] = useState<SyncState>(hasSupabaseConfig ? "loading" : "local");
+  const [syncError, setSyncError] = useState("");
 
   const user = session?.user ?? null;
   const isCloud = Boolean(user && supabase);
@@ -384,6 +387,7 @@ export function App() {
 
     async function loadWorkspace(currentUser: SupabaseUser, db: NonNullable<typeof supabase>) {
       setSyncState("loading");
+      setSyncError("");
       try {
         let { data: actionData, error: actionError } = await db
           .from("operator_actions")
@@ -460,8 +464,10 @@ export function App() {
       } catch (error) {
         if (cancelled) return;
         console.error(error);
+        const message = readableError(error);
         setSyncState("error");
-        flash("Supabase schema missing");
+        setSyncError(message);
+        flash("Database not ready");
       }
     }
 
@@ -559,6 +565,7 @@ export function App() {
 
     if (isCloud && supabase && user) {
       setSyncState("saving");
+      setSyncError("");
       const { data: inserted, error } = await supabase
         .from("operator_actions")
         .insert({
@@ -574,6 +581,7 @@ export function App() {
 
       if (error || !inserted) {
         setSyncState("error");
+        setSyncError(readableError(error));
         flash("Action not saved");
         return;
       }
@@ -582,6 +590,7 @@ export function App() {
       setCloudActions((items) => [rowToAction(row), ...items]);
       setDone((items) => ({ ...items, [row.id]: row.done }));
       setSyncState("ready");
+      setSyncError("");
       flash("Action saved");
     } else {
       setLocalActions((items) => [draft, ...items]);
@@ -597,6 +606,7 @@ export function App() {
 
     if (isCloud && supabase) {
       setSyncState("saving");
+      setSyncError("");
       const { error } = await supabase
         .from("operator_actions")
         .update({ done: nextValue })
@@ -605,12 +615,72 @@ export function App() {
       if (error) {
         setDone((items) => ({ ...items, [id]: !nextValue }));
         setSyncState("error");
+        setSyncError(readableError(error));
         flash("Action not synced");
         return;
       }
 
       setSyncState("ready");
+      setSyncError("");
     }
+  }
+
+  async function updateAction(nextAction: Action) {
+    if (isCloud && supabase) {
+      setSyncState("saving");
+      setSyncError("");
+      const { error } = await supabase
+        .from("operator_actions")
+        .update({
+          mission: nextAction.mission,
+          title: nextAction.title,
+          leverage: nextAction.leverage,
+          due: nextAction.due
+        })
+        .eq("id", nextAction.id);
+
+      if (error) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Action not updated");
+        return;
+      }
+
+      setCloudActions((items) => items.map((item) => (item.id === nextAction.id ? nextAction : item)));
+      setSyncState("ready");
+      setSyncError("");
+      flash("Action updated");
+      return;
+    }
+
+    setLocalActions((items) => items.map((item) => (item.id === nextAction.id ? nextAction : item)));
+    flash("Action updated locally");
+  }
+
+  async function deleteAction(id: string) {
+    if (isCloud && supabase) {
+      setSyncState("saving");
+      setSyncError("");
+      const { error } = await supabase.from("operator_actions").delete().eq("id", id);
+
+      if (error) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Action not deleted");
+        return;
+      }
+
+      setCloudActions((items) => items.filter((item) => item.id !== id));
+      setDone((items) => removeRecordKey(items, id));
+      setSyncState("ready");
+      setSyncError("");
+      flash("Action deleted");
+      return;
+    }
+
+    setLocalActions((items) => items.filter((item) => item.id !== id));
+    setDone((items) => removeRecordKey(items, id));
+    flash("Action deleted locally");
   }
 
   async function addPipelineItem(event: FormEvent<HTMLFormElement>) {
@@ -634,6 +704,7 @@ export function App() {
 
     if (isCloud && supabase && user) {
       setSyncState("saving");
+      setSyncError("");
       const { data: inserted, error } = await supabase
         .from("pipeline_items")
         .insert({
@@ -649,6 +720,7 @@ export function App() {
 
       if (error || !inserted) {
         setSyncState("error");
+        setSyncError(readableError(error));
         flash("Pipeline item not saved");
         return;
       }
@@ -659,6 +731,7 @@ export function App() {
         [row.lane]: [row, ...(items[row.lane] ?? [])]
       }));
       setSyncState("ready");
+      setSyncError("");
       flash("Pipeline saved");
     } else {
       setLocalPipelines((items) => ({
@@ -671,11 +744,69 @@ export function App() {
     form.reset();
   }
 
+  async function updatePipelineItem(nextRow: PipelineRow) {
+    if (isCloud && supabase) {
+      setSyncState("saving");
+      setSyncError("");
+      const { error } = await supabase
+        .from("pipeline_items")
+        .update({
+          lane: nextRow.lane,
+          name: nextRow.name,
+          counterparty: nextRow.counterparty,
+          next_step: nextRow.next,
+          signal: nextRow.signal
+        })
+        .eq("id", nextRow.id);
+
+      if (error) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Pipeline item not updated");
+        return;
+      }
+
+      setCloudPipelines((items) => replacePipelineRow(items, nextRow));
+      setSyncState("ready");
+      setSyncError("");
+      flash("Pipeline updated");
+      return;
+    }
+
+    setLocalPipelines((items) => replacePipelineRow(items, nextRow));
+    flash("Pipeline updated locally");
+  }
+
+  async function deletePipelineItem(row: PipelineRow) {
+    if (isCloud && supabase) {
+      setSyncState("saving");
+      setSyncError("");
+      const { error } = await supabase.from("pipeline_items").delete().eq("id", row.id);
+
+      if (error) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Pipeline item not deleted");
+        return;
+      }
+
+      setCloudPipelines((items) => removePipelineRow(items, row));
+      setSyncState("ready");
+      setSyncError("");
+      flash("Pipeline deleted");
+      return;
+    }
+
+    setLocalPipelines((items) => removePipelineRow(items, row));
+    flash("Pipeline deleted locally");
+  }
+
   async function saveDossierNote(dossierKey: string, body: string) {
     setDossierNotes((items) => ({ ...items, [dossierKey]: body }));
 
     if (isCloud && supabase && user) {
       setSyncState("saving");
+      setSyncError("");
       const { error } = await supabase
         .from("dossier_notes")
         .upsert(
@@ -689,11 +820,13 @@ export function App() {
 
       if (error) {
         setSyncState("error");
+        setSyncError(readableError(error));
         flash("Note not synced");
         return;
       }
 
       setSyncState("ready");
+      setSyncError("");
       flash("Note saved");
     } else {
       flash("Note saved locally");
@@ -797,7 +930,7 @@ export function App() {
           {syncState === "error" && (
             <div className="setup-strip error">
               <ShieldCheck />
-              <span>Run the SQL schema in Supabase, then reload.</span>
+              <span>{syncError || "Run the SQL schema in Supabase, then reload."}</span>
             </div>
           )}
           {view === "today" && (
@@ -811,12 +944,31 @@ export function App() {
                 setView("missions");
               }}
               onAddAction={addAction}
+              onUpdateAction={updateAction}
+              onDeleteAction={deleteAction}
             />
           )}
           {view === "missions" && (
-            <MissionsView mission={mission} actions={actions} done={done} onSelectMission={setMissionId} onToggle={toggleAction} />
+            <MissionsView
+              mission={mission}
+              actions={actions}
+              done={done}
+              onSelectMission={setMissionId}
+              onToggle={toggleAction}
+              onUpdateAction={updateAction}
+              onDeleteAction={deleteAction}
+            />
           )}
-          {view === "pipelines" && <PipelinesView active={pipeline} rows={pipelineRows} onActive={setPipeline} onAdd={addPipelineItem} />}
+          {view === "pipelines" && (
+            <PipelinesView
+              active={pipeline}
+              rows={pipelineRows}
+              onActive={setPipeline}
+              onAdd={addPipelineItem}
+              onUpdate={updatePipelineItem}
+              onDelete={deletePipelineItem}
+            />
+          )}
           {view === "dossiers" && (
             <DossiersView
               active={dossier}
@@ -958,7 +1110,9 @@ function TodayView({
   done,
   onToggle,
   onSelectMission,
-  onAddAction
+  onAddAction,
+  onUpdateAction,
+  onDeleteAction
 }: {
   mission: Mission;
   actions: Action[];
@@ -966,6 +1120,8 @@ function TodayView({
   onToggle: (id: string) => void;
   onSelectMission: (id: MissionId) => void;
   onAddAction: (event: FormEvent<HTMLFormElement>) => void;
+  onUpdateAction: (action: Action) => void;
+  onDeleteAction: (id: string) => void;
 }) {
   return (
     <div className="today-grid">
@@ -991,19 +1147,15 @@ function TodayView({
           {actions.map((action) => {
             const itemMission = missions.find((item) => item.id === action.mission)!;
             return (
-              <article className={done[action.id] ? "action done" : "action"} key={action.id}>
-                <button className="check" onClick={() => onToggle(action.id)} aria-label="Toggle action">
-                  <Check />
-                </button>
-                <div>
-                  <div className="action-title">{action.title}</div>
-                  <p>{action.leverage}</p>
-                  <div className="chips">
-                    <span className={`chip ${itemMission.tone}`}>{itemMission.label}</span>
-                    <span className="chip neutral">{action.due}</span>
-                  </div>
-                </div>
-              </article>
+              <ActionCard
+                key={action.id}
+                action={action}
+                done={Boolean(done[action.id])}
+                mission={itemMission}
+                onToggle={onToggle}
+                onUpdate={onUpdateAction}
+                onDelete={onDeleteAction}
+              />
             );
           })}
         </div>
@@ -1040,13 +1192,17 @@ function MissionsView({
   actions,
   done,
   onSelectMission,
-  onToggle
+  onToggle,
+  onUpdateAction,
+  onDeleteAction
 }: {
   mission: Mission;
   actions: Action[];
   done: Record<string, boolean>;
   onSelectMission: (id: MissionId) => void;
   onToggle: (id: string) => void;
+  onUpdateAction: (action: Action) => void;
+  onDeleteAction: (id: string) => void;
 }) {
   return (
     <div className="split-view">
@@ -1086,15 +1242,16 @@ function MissionsView({
             {actions
               .filter((action) => action.mission === mission.id)
               .map((action) => (
-                <article className={done[action.id] ? "action done" : "action"} key={action.id}>
-                  <button className="check" onClick={() => onToggle(action.id)} aria-label="Toggle action">
-                    <Check />
-                  </button>
-                  <div>
-                    <div className="action-title">{action.title}</div>
-                    <p>{action.leverage}</p>
-                  </div>
-                </article>
+                <ActionCard
+                  key={action.id}
+                  action={action}
+                  done={Boolean(done[action.id])}
+                  mission={mission}
+                  onToggle={onToggle}
+                  onUpdate={onUpdateAction}
+                  onDelete={onDeleteAction}
+                  compact
+                />
               ))}
           </div>
         </section>
@@ -1107,12 +1264,16 @@ function PipelinesView({
   active,
   rows,
   onActive,
-  onAdd
+  onAdd,
+  onUpdate,
+  onDelete
 }: {
   active: string;
   rows: Record<string, PipelineRow[]>;
   onActive: (value: string) => void;
   onAdd: (event: FormEvent<HTMLFormElement>) => void;
+  onUpdate: (row: PipelineRow) => void;
+  onDelete: (row: PipelineRow) => void;
 }) {
   const activeRows = rows[active] ?? [];
   return (
@@ -1135,18 +1296,175 @@ function PipelinesView({
       </form>
       <section className="pipeline-table">
         {activeRows.map((row) => (
-          <article className="pipeline-row" key={row.id}>
-            <div>
-              <strong>{row.name}</strong>
-              <span>{row.counterparty}</span>
-            </div>
-            <p>{row.next}</p>
-            <span className="score">{row.signal}</span>
-            <ArrowRight />
-          </article>
+          <PipelineRowCard key={row.id} row={row} onUpdate={onUpdate} onDelete={onDelete} />
         ))}
       </section>
     </div>
+  );
+}
+
+function ActionCard({
+  action,
+  done,
+  mission,
+  onToggle,
+  onUpdate,
+  onDelete,
+  compact = false
+}: {
+  action: Action;
+  done: boolean;
+  mission: Mission;
+  onToggle: (id: string) => void;
+  onUpdate: (action: Action) => void;
+  onDelete: (id: string) => void;
+  compact?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const nextMission = String(data.get("mission") ?? action.mission) as MissionId;
+    const title = String(data.get("title") ?? "").trim();
+    const leverage = String(data.get("leverage") ?? "").trim();
+    const due = String(data.get("due") ?? "").trim() || "Today";
+    if (!title) return;
+
+    onUpdate({
+      ...action,
+      mission: missions.some((item) => item.id === nextMission) ? nextMission : action.mission,
+      title,
+      leverage,
+      due
+    });
+    setEditing(false);
+  }
+
+  return (
+    <article className={done ? "action done" : "action"}>
+      <button className="check" onClick={() => onToggle(action.id)} aria-label="Toggle action">
+        <Check />
+      </button>
+      {editing ? (
+        <form className="edit-card" onSubmit={submit}>
+          <input name="title" defaultValue={action.title} maxLength={160} />
+          <textarea name="leverage" defaultValue={action.leverage} rows={3} />
+          <div className="edit-grid">
+            <select name="mission" defaultValue={action.mission}>
+              {missions.map((item) => (
+                <option key={item.id} value={item.id}>{item.label}</option>
+              ))}
+            </select>
+            <input name="due" defaultValue={action.due} maxLength={40} />
+          </div>
+          <div className="edit-actions">
+            <button type="submit">
+              <Save />
+              Save
+            </button>
+            <button type="button" onClick={() => setEditing(false)}>Cancel</button>
+          </div>
+        </form>
+      ) : (
+        <div className="action-main">
+          <div className="action-heading">
+            <div className="action-title">{action.title}</div>
+            <div className="action-tools">
+              <button className="mini-icon" onClick={() => setEditing(true)} aria-label="Edit action" title="Edit action">
+                <Pencil />
+              </button>
+              <button className="mini-icon danger" onClick={() => onDelete(action.id)} aria-label="Delete action" title="Delete action">
+                <Trash2 />
+              </button>
+            </div>
+          </div>
+          <p>{action.leverage}</p>
+          {!compact && (
+            <div className="chips">
+              <span className={`chip ${mission.tone}`}>{mission.label}</span>
+              <span className="chip neutral">{action.due}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function PipelineRowCard({
+  row,
+  onUpdate,
+  onDelete
+}: {
+  row: PipelineRow;
+  onUpdate: (row: PipelineRow) => void;
+  onDelete: (row: PipelineRow) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const name = String(data.get("name") ?? "").trim();
+    if (!name) return;
+
+    onUpdate({
+      ...row,
+      lane: String(data.get("lane") ?? row.lane),
+      name,
+      counterparty: String(data.get("counterparty") ?? "").trim(),
+      next: String(data.get("next") ?? "").trim(),
+      signal: String(data.get("signal") ?? "").trim()
+    });
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <form className="pipeline-row editing" onSubmit={submit}>
+        <div className="pipeline-edit-stack">
+          <input name="name" defaultValue={row.name} maxLength={120} />
+          <input name="counterparty" defaultValue={row.counterparty} maxLength={120} />
+        </div>
+        <input name="next" defaultValue={row.next} maxLength={220} />
+        <div className="pipeline-edit-stack">
+          <select name="lane" defaultValue={row.lane}>
+            {Object.keys(pipelineSeeds).map((lane) => (
+              <option key={lane} value={lane}>{lane}</option>
+            ))}
+          </select>
+          <input name="signal" defaultValue={row.signal} maxLength={40} />
+        </div>
+        <div className="row-tools">
+          <button className="mini-icon solid" type="submit" aria-label="Save pipeline item" title="Save">
+            <Save />
+          </button>
+          <button className="mini-icon" type="button" onClick={() => setEditing(false)} aria-label="Cancel edit" title="Cancel">
+            <X />
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  return (
+    <article className="pipeline-row">
+      <div>
+        <strong>{row.name}</strong>
+        <span>{row.counterparty}</span>
+      </div>
+      <p>{row.next}</p>
+      <span className="score">{row.signal}</span>
+      <div className="row-tools">
+        <button className="mini-icon" onClick={() => setEditing(true)} aria-label="Edit pipeline item" title="Edit">
+          <Pencil />
+        </button>
+        <button className="mini-icon danger" onClick={() => onDelete(row)} aria-label="Delete pipeline item" title="Delete">
+          <Trash2 />
+        </button>
+      </div>
+    </article>
   );
 }
 
@@ -1314,6 +1632,42 @@ function groupPipelineRows(rows: PipelineItemRow[]): Record<string, PipelineRow[
   });
 
   return grouped;
+}
+
+function removeRecordKey<T>(record: Record<string, T>, key: string) {
+  const next = { ...record };
+  delete next[key];
+  return next;
+}
+
+function replacePipelineRow(rows: Record<string, PipelineRow[]>, nextRow: PipelineRow) {
+  const next = Object.fromEntries(
+    Object.entries(rows).map(([lane, items]) => [
+      lane,
+      items.filter((item) => item.id !== nextRow.id)
+    ])
+  ) as Record<string, PipelineRow[]>;
+
+  next[nextRow.lane] = [nextRow, ...(next[nextRow.lane] ?? [])];
+  return next;
+}
+
+function removePipelineRow(rows: Record<string, PipelineRow[]>, target: PipelineRow) {
+  return Object.fromEntries(
+    Object.entries(rows).map(([lane, items]) => [
+      lane,
+      items.filter((item) => item.id !== target.id)
+    ])
+  ) as Record<string, PipelineRow[]>;
+}
+
+function readableError(error: unknown) {
+  if (!error) return "Database action failed.";
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && "message" in error) {
+    return String((error as { message?: unknown }).message ?? "Database action failed.");
+  }
+  return "Database action failed.";
 }
 
 function stateLabel(state: SyncState) {

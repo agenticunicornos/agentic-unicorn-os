@@ -345,6 +345,53 @@ kbd {
   font-weight: 760;
 }
 
+.action-main {
+  min-width: 0;
+}
+
+.action-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.action-tools,
+.row-tools,
+.edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mini-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  color: var(--muted);
+}
+
+.mini-icon:hover {
+  border-color: var(--line-2);
+  color: var(--text);
+}
+
+.mini-icon.danger:hover {
+  border-color: color-mix(in srgb, var(--coral), transparent 46%);
+  color: var(--coral);
+}
+
+.mini-icon.solid {
+  border-color: var(--text);
+  background: var(--text);
+  color: #111;
+}
+
 .action p {
   margin: 5px 0 0;
   font-size: 13px;
@@ -413,7 +460,12 @@ kbd {
 }
 
 .quick-add input,
-.palette-input input {
+.palette-input input,
+.edit-card input,
+.edit-card textarea,
+.edit-card select,
+.pipeline-row.editing input,
+.pipeline-row.editing select {
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -422,9 +474,47 @@ kbd {
   outline: 0;
 }
 
-.quick-add input {
+.quick-add input,
+.edit-card input,
+.edit-card select,
+.pipeline-row.editing input,
+.pipeline-row.editing select {
   min-height: 42px;
   padding: 0 12px;
+}
+
+.edit-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.edit-card textarea {
+  min-height: 92px;
+  resize: vertical;
+  padding: 10px 12px;
+}
+
+.edit-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(120px, 1fr);
+  gap: 8px;
+}
+
+.edit-actions button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  color: var(--muted);
+  padding: 0 10px;
+  font-weight: 800;
+}
+
+.edit-actions button[type="submit"] {
+  border-color: var(--text);
+  background: var(--text);
+  color: #111;
 }
 
 .quick-add button,
@@ -614,11 +704,20 @@ kbd {
 
 .pipeline-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(240px, 1.2fr) 100px 24px;
+  grid-template-columns: minmax(180px, 1fr) minmax(240px, 1.2fr) 100px 70px;
   gap: 16px;
   align-items: center;
   border-bottom: 1px solid var(--line);
   padding: 16px;
+}
+
+.pipeline-row.editing {
+  background: var(--panel);
+}
+
+.pipeline-edit-stack {
+  display: grid;
+  gap: 8px;
 }
 
 .pipeline-row:last-child {

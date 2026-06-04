@@ -51,6 +51,11 @@ begin
 end;
 $$;
 
+drop policy if exists "profiles_insert_own" on public.profiles;
+create policy "profiles_insert_own"
+on public.profiles for insert
+with check (auth.uid() = id);
+
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
 after insert on auth.users
@@ -180,3 +185,27 @@ drop trigger if exists set_dossier_notes_updated_at on public.dossier_notes;
 create trigger set_dossier_notes_updated_at
 before update on public.dossier_notes
 for each row execute function public.set_updated_at();
+
+grant usage on schema public to anon, authenticated;
+
+grant select, insert, update, delete
+on public.operator_actions
+to authenticated;
+
+grant select, insert, update, delete
+on public.pipeline_items
+to authenticated;
+
+grant select, insert, update, delete
+on public.dossier_notes
+to authenticated;
+
+grant select, insert, update
+on public.profiles
+to authenticated;
+
+grant execute on function public.set_updated_at()
+to authenticated;
+
+grant execute on function public.handle_new_user()
+to authenticated;
