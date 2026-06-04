@@ -8,28 +8,38 @@ import {
   ChevronRight,
   CircleDot,
   ClipboardList,
+  Cloud,
   Command,
   Copy,
+  Database,
   FileText,
   Flame,
   GitBranch,
   Handshake,
   Layers3,
   LineChart,
+  Lock,
+  LogOut,
   Plus,
   Rocket,
+  Save,
   Search,
   ShieldCheck,
   Sparkles,
   Target,
   Timer,
+  User,
   X
 } from "lucide-react";
+import type { Session, User as SupabaseUser } from "@supabase/supabase-js";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { hasSupabaseConfig, supabase } from "./lib/supabase";
 
 type ViewId = "today" | "missions" | "pipelines" | "dossiers" | "brief";
 type MissionId = "product" | "distribution" | "capital" | "ma" | "consulting";
 type Tone = "mint" | "blue" | "amber" | "coral" | "lime";
+type AuthMode = "signin" | "signup";
+type SyncState = "local" | "loading" | "ready" | "saving" | "error";
 
 type Mission = {
   id: MissionId;
@@ -51,17 +61,44 @@ type Action = {
 };
 
 type PipelineRow = {
+  id: string;
+  lane: string;
   name: string;
   counterparty: string;
   next: string;
   signal: string;
 };
 
+type PipelineSeed = Omit<PipelineRow, "id" | "lane">;
+
 type Dossier = {
   id: string;
   title: string;
   source: string;
   sections: Array<{ title: string; lines: string[] }>;
+};
+
+type ActionRow = {
+  id: string;
+  mission: MissionId;
+  title: string;
+  leverage: string;
+  due: string;
+  done: boolean;
+};
+
+type PipelineItemRow = {
+  id: string;
+  lane: string;
+  name: string;
+  counterparty: string;
+  next_step: string;
+  signal: string;
+};
+
+type DossierNoteRow = {
+  dossier_id: string;
+  body: string;
 };
 
 const views: Array<{ id: ViewId; label: string; icon: ReactNode }> = [
@@ -127,35 +164,35 @@ const missions: Mission[] = [
 
 const seedActions: Action[] = [
   {
-    id: "a1",
+    id: "seed-product-shell",
     mission: "product",
     title: "Replace the static preview with the real product shell",
     leverage: "Makes Agentic Unicorn OS operable, not just readable.",
     due: "Today"
   },
   {
-    id: "a2",
+    id: "seed-podcast-targets",
     mission: "distribution",
     title: "Prepare the first 25 podcast targets",
     leverage: "Turns founder credibility into qualified inbound.",
     due: "Today"
   },
   {
-    id: "a3",
+    id: "seed-kpi-pack",
     mission: "capital",
     title: "Package 12-week metrics for investor intros",
     leverage: "Creates a cleaner fundraising window.",
     due: "This week"
   },
   {
-    id: "a4",
+    id: "seed-acquirer-conversations",
     mission: "ma",
     title: "Start three discreet acquirer conversations",
     leverage: "Builds strategic optionality before pressure.",
     due: "This week"
   },
   {
-    id: "a5",
+    id: "seed-consulting-prospects",
     mission: "consulting",
     title: "Qualify five premium consulting prospects",
     leverage: "Adds cash and field signal without diluting the product.",
@@ -163,7 +200,7 @@ const seedActions: Action[] = [
   }
 ];
 
-const pipelines: Record<string, PipelineRow[]> = {
+const pipelineSeeds: Record<string, PipelineSeed[]> = {
   Podcasts: [
     { name: "Podcast IA #1", counterparty: "Host A", next: "Personalize with a production reliability case", signal: "fit 5" },
     { name: "Podcast IA #2", counterparty: "Host B", next: "Send three practical talking points", signal: "fit 4" },
@@ -255,27 +292,185 @@ const storage = {
   }
 };
 
+function makeDefaultPipelines(): Record<string, PipelineRow[]> {
+  return Object.fromEntries(
+    Object.entries(pipelineSeeds).map(([lane, rows]) => [
+      lane,
+      rows.map((row, index) => ({
+        ...row,
+        id: `seed-${lane.toLowerCase()}-${index}`,
+        lane
+      }))
+    ])
+  );
+}
+
 export function App() {
   const [view, setView] = useState<ViewId>(() => storage.get("auos:view", "today"));
   const [missionId, setMissionId] = useState<MissionId>(() => storage.get("auos:mission", "product"));
   const [pipeline, setPipeline] = useState(() => storage.get("auos:pipeline", "Podcasts"));
   const [dossierId, setDossierId] = useState(() => storage.get("auos:dossier", "masterplan"));
   const [done, setDone] = useState<Record<string, boolean>>(() => storage.get("auos:done", {}));
-  const [customActions, setCustomActions] = useState<Action[]>(() => storage.get("auos:actions", []));
+  const [localActions, setLocalActions] = useState<Action[]>(() => storage.get("auos:actions", []));
+  const [cloudActions, setCloudActions] = useState<Action[]>([]);
+  const [localPipelines, setLocalPipelines] = useState<Record<string, PipelineRow[]>>(() => storage.get("auos:pipelineRows", makeDefaultPipelines()));
+  const [cloudPipelines, setCloudPipelines] = useState<Record<string, PipelineRow[]>>(makeDefaultPipelines);
+  const [dossierNotes, setDossierNotes] = useState<Record<string, string>>(() => storage.get("auos:dossierNotes", {}));
   const [commandOpen, setCommandOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [toast, setToast] = useState("");
+  const [session, setSession] = useState<Session | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode>("signin");
+  const [authLoading, setAuthLoading] = useState(hasSupabaseConfig);
+  const [authMessage, setAuthMessage] = useState("");
+  const [syncState, setSyncState] = useState<SyncState>(hasSupabaseConfig ? "loading" : "local");
 
+  const user = session?.user ?? null;
+  const isCloud = Boolean(user && supabase);
   const mission = missions.find((item) => item.id === missionId) ?? missions[0];
   const dossier = dossiers.find((item) => item.id === dossierId) ?? dossiers[0];
-  const actions = [...seedActions, ...customActions];
+  const actions = isCloud ? cloudActions : [...seedActions, ...localActions];
+  const pipelineRows = isCloud ? cloudPipelines : localPipelines;
 
   useEffect(() => storage.set("auos:view", view), [view]);
   useEffect(() => storage.set("auos:mission", missionId), [missionId]);
   useEffect(() => storage.set("auos:pipeline", pipeline), [pipeline]);
   useEffect(() => storage.set("auos:dossier", dossierId), [dossierId]);
-  useEffect(() => storage.set("auos:done", done), [done]);
-  useEffect(() => storage.set("auos:actions", customActions), [customActions]);
+  useEffect(() => {
+    if (!isCloud) storage.set("auos:done", done);
+  }, [done, isCloud]);
+  useEffect(() => {
+    if (!isCloud) storage.set("auos:actions", localActions);
+  }, [localActions, isCloud]);
+  useEffect(() => {
+    if (!isCloud) storage.set("auos:pipelineRows", localPipelines);
+  }, [localPipelines, isCloud]);
+  useEffect(() => {
+    if (!isCloud) storage.set("auos:dossierNotes", dossierNotes);
+  }, [dossierNotes, isCloud]);
+
+  useEffect(() => {
+    if (!supabase) {
+      setAuthLoading(false);
+      setSyncState("local");
+      return;
+    }
+
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setSession(data.session);
+      setAuthLoading(false);
+      setSyncState(data.session ? "loading" : "ready");
+    });
+
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setAuthMessage("");
+      setSyncState(nextSession ? "loading" : "ready");
+    });
+
+    return () => {
+      mounted = false;
+      data.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const client = supabase;
+    if (!client || !user) return;
+
+    let cancelled = false;
+
+    async function loadWorkspace(currentUser: SupabaseUser, db: NonNullable<typeof supabase>) {
+      setSyncState("loading");
+      try {
+        let { data: actionData, error: actionError } = await db
+          .from("operator_actions")
+          .select("id, mission, title, leverage, due, done")
+          .order("created_at", { ascending: true });
+
+        if (actionError) throw actionError;
+
+        let actionRows = (actionData ?? []) as ActionRow[];
+        if (actionRows.length === 0) {
+          const inserts = seedActions.map((action) => ({
+            user_id: currentUser.id,
+            seed_key: action.id,
+            mission: action.mission,
+            title: action.title,
+            leverage: action.leverage,
+            due: action.due,
+            done: false
+          }));
+
+          const seeded = await db
+            .from("operator_actions")
+            .insert(inserts)
+            .select("id, mission, title, leverage, due, done")
+            .order("created_at", { ascending: true });
+
+          if (seeded.error) throw seeded.error;
+          actionRows = (seeded.data ?? []) as ActionRow[];
+        }
+
+        let { data: pipelineData, error: pipelineError } = await db
+          .from("pipeline_items")
+          .select("id, lane, name, counterparty, next_step, signal")
+          .order("created_at", { ascending: true });
+
+        if (pipelineError) throw pipelineError;
+
+        let pipelineItems = (pipelineData ?? []) as PipelineItemRow[];
+        if (pipelineItems.length === 0) {
+          const inserts = Object.entries(pipelineSeeds).flatMap(([lane, rows]) =>
+            rows.map((row) => ({
+              user_id: currentUser.id,
+              lane,
+              name: row.name,
+              counterparty: row.counterparty,
+              next_step: row.next,
+              signal: row.signal
+            }))
+          );
+
+          const seeded = await db
+            .from("pipeline_items")
+            .insert(inserts)
+            .select("id, lane, name, counterparty, next_step, signal")
+            .order("created_at", { ascending: true });
+
+          if (seeded.error) throw seeded.error;
+          pipelineItems = (seeded.data ?? []) as PipelineItemRow[];
+        }
+
+        const { data: noteData, error: noteError } = await db
+          .from("dossier_notes")
+          .select("dossier_id, body");
+
+        if (noteError) throw noteError;
+
+        if (cancelled) return;
+
+        setCloudActions(actionRows.map(rowToAction));
+        setDone(Object.fromEntries(actionRows.map((row) => [row.id, row.done])));
+        setCloudPipelines(groupPipelineRows(pipelineItems));
+        setDossierNotes(Object.fromEntries(((noteData ?? []) as DossierNoteRow[]).map((note) => [note.dossier_id, note.body])));
+        setSyncState("ready");
+      } catch (error) {
+        if (cancelled) return;
+        console.error(error);
+        setSyncState("error");
+        flash("Supabase schema missing");
+      }
+    }
+
+    loadWorkspace(user, client);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
@@ -293,7 +488,7 @@ export function App() {
 
   function flash(message: string) {
     setToast(message);
-    window.setTimeout(() => setToast(""), 1600);
+    window.setTimeout(() => setToast(""), 1800);
   }
 
   function copyBrief() {
@@ -303,22 +498,206 @@ export function App() {
       .catch(() => flash("Clipboard unavailable"));
   }
 
-  function addAction(event: FormEvent<HTMLFormElement>) {
+  async function handleAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!supabase) return;
+
     const data = new FormData(event.currentTarget);
+    const email = String(data.get("email") ?? "").trim();
+    const password = String(data.get("password") ?? "");
+    if (!email || !password) return;
+
+    setAuthLoading(true);
+    setAuthMessage("");
+
+    const result =
+      authMode === "signup"
+        ? await supabase.auth.signUp({
+            email,
+            password,
+            options: { emailRedirectTo: window.location.origin }
+          })
+        : await supabase.auth.signInWithPassword({ email, password });
+
+    setAuthLoading(false);
+
+    if (result.error) {
+      setAuthMessage(result.error.message);
+      return;
+    }
+
+    if (authMode === "signup" && !result.data.session) {
+      setAuthMessage("Account created. Check the email confirmation if Supabase requires it.");
+      return;
+    }
+
+    flash(authMode === "signup" ? "Account ready" : "Signed in");
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setCloudActions([]);
+    setDone(storage.get("auos:done", {}));
+    setSyncState("ready");
+  }
+
+  async function addAction(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
     const title = String(data.get("title") ?? "").trim();
     if (!title) return;
-    setCustomActions((items) => [
-      {
-        id: `custom-${Date.now()}`,
-        mission: missionId,
-        title,
-        leverage: "Manual operator action.",
-        due: "Today"
-      },
-      ...items
-    ]);
-    event.currentTarget.reset();
+
+    const draft: Action = {
+      id: `local-${Date.now()}`,
+      mission: missionId,
+      title,
+      leverage: "Manual operator action.",
+      due: "Today"
+    };
+
+    if (isCloud && supabase && user) {
+      setSyncState("saving");
+      const { data: inserted, error } = await supabase
+        .from("operator_actions")
+        .insert({
+          user_id: user.id,
+          mission: draft.mission,
+          title: draft.title,
+          leverage: draft.leverage,
+          due: draft.due,
+          done: false
+        })
+        .select("id, mission, title, leverage, due, done")
+        .single();
+
+      if (error || !inserted) {
+        setSyncState("error");
+        flash("Action not saved");
+        return;
+      }
+
+      const row = inserted as ActionRow;
+      setCloudActions((items) => [rowToAction(row), ...items]);
+      setDone((items) => ({ ...items, [row.id]: row.done }));
+      setSyncState("ready");
+      flash("Action saved");
+    } else {
+      setLocalActions((items) => [draft, ...items]);
+      flash("Action saved locally");
+    }
+
+    form.reset();
+  }
+
+  async function toggleAction(id: string) {
+    const nextValue = !done[id];
+    setDone((items) => ({ ...items, [id]: nextValue }));
+
+    if (isCloud && supabase) {
+      setSyncState("saving");
+      const { error } = await supabase
+        .from("operator_actions")
+        .update({ done: nextValue })
+        .eq("id", id);
+
+      if (error) {
+        setDone((items) => ({ ...items, [id]: !nextValue }));
+        setSyncState("error");
+        flash("Action not synced");
+        return;
+      }
+
+      setSyncState("ready");
+    }
+  }
+
+  async function addPipelineItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const name = String(data.get("name") ?? "").trim();
+    const counterparty = String(data.get("counterparty") ?? "").trim();
+    const next = String(data.get("next") ?? "").trim();
+    const signal = String(data.get("signal") ?? "").trim();
+    if (!name) return;
+
+    const draft: PipelineRow = {
+      id: `local-pipeline-${Date.now()}`,
+      lane: pipeline,
+      name,
+      counterparty,
+      next,
+      signal
+    };
+
+    if (isCloud && supabase && user) {
+      setSyncState("saving");
+      const { data: inserted, error } = await supabase
+        .from("pipeline_items")
+        .insert({
+          user_id: user.id,
+          lane: pipeline,
+          name,
+          counterparty,
+          next_step: next,
+          signal
+        })
+        .select("id, lane, name, counterparty, next_step, signal")
+        .single();
+
+      if (error || !inserted) {
+        setSyncState("error");
+        flash("Pipeline item not saved");
+        return;
+      }
+
+      const row = pipelineRowFromDb(inserted as PipelineItemRow);
+      setCloudPipelines((items) => ({
+        ...items,
+        [row.lane]: [row, ...(items[row.lane] ?? [])]
+      }));
+      setSyncState("ready");
+      flash("Pipeline saved");
+    } else {
+      setLocalPipelines((items) => ({
+        ...items,
+        [draft.lane]: [draft, ...(items[draft.lane] ?? [])]
+      }));
+      flash("Pipeline saved locally");
+    }
+
+    form.reset();
+  }
+
+  async function saveDossierNote(dossierKey: string, body: string) {
+    setDossierNotes((items) => ({ ...items, [dossierKey]: body }));
+
+    if (isCloud && supabase && user) {
+      setSyncState("saving");
+      const { error } = await supabase
+        .from("dossier_notes")
+        .upsert(
+          {
+            user_id: user.id,
+            dossier_id: dossierKey,
+            body
+          },
+          { onConflict: "user_id,dossier_id" }
+        );
+
+      if (error) {
+        setSyncState("error");
+        flash("Note not synced");
+        return;
+      }
+
+      setSyncState("ready");
+      flash("Note saved");
+    } else {
+      flash("Note saved locally");
+    }
   }
 
   const commandItems = useMemo(() => {
@@ -343,6 +722,22 @@ export function App() {
   const filteredCommands = commandItems.filter((item) =>
     `${item.title} ${item.meta}`.toLowerCase().includes(query.toLowerCase())
   );
+
+  if (authLoading) {
+    return <LoadingScreen />;
+  }
+
+  if (hasSupabaseConfig && !user) {
+    return (
+      <AuthScreen
+        mode={authMode}
+        onMode={setAuthMode}
+        onSubmit={handleAuth}
+        loading={authLoading}
+        message={authMessage}
+      />
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -373,6 +768,14 @@ export function App() {
             <h1>{viewTitle(view)}</h1>
           </div>
           <div className="top-actions">
+            <SyncPill state={syncState} cloud={isCloud} />
+            {user && (
+              <button className="profile-button" onClick={signOut} title={user.email ?? "Account"}>
+                <User />
+                <span>{user.email}</span>
+                <LogOut />
+              </button>
+            )}
             <button className="command-button" onClick={() => setCommandOpen(true)}>
               <Search />
               <span>Command</span>
@@ -385,12 +788,24 @@ export function App() {
         </header>
 
         <section className="content">
+          {!hasSupabaseConfig && (
+            <div className="setup-strip">
+              <Database />
+              <span>Supabase env vars missing. Running local mode.</span>
+            </div>
+          )}
+          {syncState === "error" && (
+            <div className="setup-strip error">
+              <ShieldCheck />
+              <span>Run the SQL schema in Supabase, then reload.</span>
+            </div>
+          )}
           {view === "today" && (
             <TodayView
               mission={mission}
               actions={actions}
               done={done}
-              onToggle={(id) => setDone((items) => ({ ...items, [id]: !items[id] }))}
+              onToggle={toggleAction}
               onSelectMission={(id) => {
                 setMissionId(id);
                 setView("missions");
@@ -399,10 +814,17 @@ export function App() {
             />
           )}
           {view === "missions" && (
-            <MissionsView mission={mission} actions={actions} done={done} onSelectMission={setMissionId} onToggle={(id) => setDone((items) => ({ ...items, [id]: !items[id] }))} />
+            <MissionsView mission={mission} actions={actions} done={done} onSelectMission={setMissionId} onToggle={toggleAction} />
           )}
-          {view === "pipelines" && <PipelinesView active={pipeline} onActive={setPipeline} />}
-          {view === "dossiers" && <DossiersView active={dossier} onActive={setDossierId} />}
+          {view === "pipelines" && <PipelinesView active={pipeline} rows={pipelineRows} onActive={setPipeline} onAdd={addPipelineItem} />}
+          {view === "dossiers" && (
+            <DossiersView
+              active={dossier}
+              note={dossierNotes[dossier.id] ?? ""}
+              onActive={setDossierId}
+              onSaveNote={saveDossierNote}
+            />
+          )}
           {view === "brief" && <BriefView onCopy={copyBrief} />}
         </section>
       </main>
@@ -443,6 +865,90 @@ export function App() {
 
       <div className={toast ? "toast visible" : "toast"}>{toast}</div>
     </div>
+  );
+}
+
+function AuthScreen({
+  mode,
+  onMode,
+  onSubmit,
+  loading,
+  message
+}: {
+  mode: AuthMode;
+  onMode: (mode: AuthMode) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  loading: boolean;
+  message: string;
+}) {
+  return (
+    <main className="auth-screen">
+      <section className="auth-card">
+        <div className="auth-mark">AU</div>
+        <div>
+          <p className="kicker">Agentic Unicorn OS</p>
+          <h1>{mode === "signin" ? "Sign in" : "Create account"}</h1>
+        </div>
+        <div className="auth-switch">
+          <button className={mode === "signin" ? "active" : ""} onClick={() => onMode("signin")} type="button">Sign in</button>
+          <button className={mode === "signup" ? "active" : ""} onClick={() => onMode("signup")} type="button">Create</button>
+        </div>
+        <form className="auth-form" onSubmit={onSubmit}>
+          <label>
+            <span>Email</span>
+            <input name="email" type="email" autoComplete="email" required />
+          </label>
+          <label>
+            <span>Password</span>
+            <input name="password" type="password" autoComplete={mode === "signin" ? "current-password" : "new-password"} minLength={6} required />
+          </label>
+          <button type="submit" disabled={loading}>
+            <Lock />
+            {loading ? "Working" : mode === "signin" ? "Enter workspace" : "Create workspace"}
+          </button>
+        </form>
+        {message && <p className="auth-message">{message}</p>}
+      </section>
+      <aside className="auth-proof">
+        <div>
+          <Cloud />
+          <strong>Cloud workspace</strong>
+          <span>Every user gets isolated records.</span>
+        </div>
+        <div>
+          <Database />
+          <strong>Supabase backend</strong>
+          <span>Actions, pipelines and notes are saved in Postgres.</span>
+        </div>
+        <div>
+          <ShieldCheck />
+          <strong>RLS enabled</strong>
+          <span>User data is scoped by auth uid.</span>
+        </div>
+      </aside>
+    </main>
+  );
+}
+
+function LoadingScreen() {
+  return (
+    <main className="auth-screen">
+      <section className="auth-card compact-auth">
+        <div className="auth-mark">AU</div>
+        <p className="kicker">Agentic Unicorn OS</p>
+        <h1>Loading workspace</h1>
+      </section>
+    </main>
+  );
+}
+
+function SyncPill({ state, cloud }: { state: SyncState; cloud: boolean }) {
+  const label = cloud ? stateLabel(state) : "Local";
+  return (
+    <span className={`sync-pill ${state}`}>
+      {cloud ? <Cloud /> : <Database />}
+      {label}
+    </span>
   );
 }
 
@@ -597,20 +1103,39 @@ function MissionsView({
   );
 }
 
-function PipelinesView({ active, onActive }: { active: string; onActive: (value: string) => void }) {
-  const rows = pipelines[active] ?? [];
+function PipelinesView({
+  active,
+  rows,
+  onActive,
+  onAdd
+}: {
+  active: string;
+  rows: Record<string, PipelineRow[]>;
+  onActive: (value: string) => void;
+  onAdd: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const activeRows = rows[active] ?? [];
   return (
     <div className="pipeline-view">
       <div className="tabs">
-        {Object.keys(pipelines).map((item) => (
+        {Object.keys(pipelineSeeds).map((item) => (
           <button key={item} className={item === active ? "tab active" : "tab"} onClick={() => onActive(item)}>
             {item}
           </button>
         ))}
       </div>
+      <form className="pipeline-add" onSubmit={onAdd}>
+        <input name="name" placeholder="Name" maxLength={120} />
+        <input name="counterparty" placeholder="Counterparty" maxLength={120} />
+        <input name="next" placeholder="Next step" maxLength={220} />
+        <input name="signal" placeholder="Signal" maxLength={40} />
+        <button type="submit">
+          <Plus />
+        </button>
+      </form>
       <section className="pipeline-table">
-        {rows.map((row) => (
-          <article className="pipeline-row" key={`${row.name}-${row.counterparty}`}>
+        {activeRows.map((row) => (
+          <article className="pipeline-row" key={row.id}>
             <div>
               <strong>{row.name}</strong>
               <span>{row.counterparty}</span>
@@ -625,7 +1150,23 @@ function PipelinesView({ active, onActive }: { active: string; onActive: (value:
   );
 }
 
-function DossiersView({ active, onActive }: { active: Dossier; onActive: (value: string) => void }) {
+function DossiersView({
+  active,
+  note,
+  onActive,
+  onSaveNote
+}: {
+  active: Dossier;
+  note: string;
+  onActive: (value: string) => void;
+  onSaveNote: (dossierId: string, body: string) => void;
+}) {
+  const [draft, setDraft] = useState(note);
+
+  useEffect(() => {
+    setDraft(note);
+  }, [active.id, note]);
+
   return (
     <div className="split-view">
       <aside className="left-list">
@@ -652,6 +1193,20 @@ function DossiersView({ active, onActive }: { active: Dossier; onActive: (value:
             </ul>
           </section>
         ))}
+        <form
+          className="dossier-note"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSaveNote(active.id, draft);
+          }}
+        >
+          <label htmlFor="dossier-note">Operator note</label>
+          <textarea id="dossier-note" value={draft} onChange={(event) => setDraft(event.target.value)} rows={7} />
+          <button type="submit">
+            <Save />
+            Save note
+          </button>
+        </form>
       </article>
     </div>
   );
@@ -724,6 +1279,48 @@ function Intel({ icon, title, copy }: { icon: ReactNode; title: string; copy: st
       <p>{copy}</p>
     </div>
   );
+}
+
+function rowToAction(row: ActionRow): Action {
+  return {
+    id: row.id,
+    mission: row.mission,
+    title: row.title,
+    leverage: row.leverage,
+    due: row.due
+  };
+}
+
+function pipelineRowFromDb(row: PipelineItemRow): PipelineRow {
+  return {
+    id: row.id,
+    lane: row.lane,
+    name: row.name,
+    counterparty: row.counterparty,
+    next: row.next_step,
+    signal: row.signal
+  };
+}
+
+function groupPipelineRows(rows: PipelineItemRow[]): Record<string, PipelineRow[]> {
+  const grouped = makeDefaultPipelines();
+  Object.keys(grouped).forEach((lane) => {
+    grouped[lane] = [];
+  });
+
+  rows.forEach((row) => {
+    const item = pipelineRowFromDb(row);
+    grouped[item.lane] = [...(grouped[item.lane] ?? []), item];
+  });
+
+  return grouped;
+}
+
+function stateLabel(state: SyncState) {
+  if (state === "loading") return "Loading";
+  if (state === "saving") return "Saving";
+  if (state === "error") return "Check DB";
+  return "Cloud";
 }
 
 function viewTitle(view: ViewId) {

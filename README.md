@@ -9,10 +9,25 @@ Production: https://agentic-unicorn-os.netlify.app
 ## Stack produit
 
 - React + TypeScript pour l'interface operator.
-- Vite pour le build rapide et le deploiement statique.
+- Supabase Auth pour les comptes utilisateurs.
+- Supabase Postgres + Row Level Security pour les actions, pipelines et notes par utilisateur.
+- Vite pour le build rapide.
 - Lucide React pour les icones produit.
-- LocalStorage pour l'etat local de la premiere version.
-- Cible suivante: Next.js, Postgres/Supabase, auth, workers de rapport et integrations agents.
+- Netlify pour la production.
+- LocalStorage uniquement comme fallback local si Supabase n'est pas configure.
+
+## Backend Supabase
+
+Le schema SQL est dans `supabase/schema.sql`.
+
+Tables principales:
+
+- `operator_actions`: actions utilisateur, statut done, mission liee.
+- `pipeline_items`: pipelines Podcasts, Investors, Offers, Acquirers, Consulting.
+- `dossier_notes`: notes personnelles par dossier.
+- `profiles`: profil lie a `auth.users`.
+
+Chaque table active RLS et limite les donnees a `auth.uid()`.
 
 ## App locale
 
@@ -23,7 +38,7 @@ npm install
 npm run dev
 ```
 
-Puis ouvrir `http://127.0.0.1:8000/`.
+Copier `.env.example` vers `.env.local`, renseigner Supabase, puis ouvrir `http://127.0.0.1:8000/`.
 
 ## Architecture du kit
 - `00-CEO-MASTERPLAN.md`: trajectoire 18 mois, gates et métriques de direction.
