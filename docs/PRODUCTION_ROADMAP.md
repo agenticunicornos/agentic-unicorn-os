@@ -9,6 +9,7 @@ Status: in progress.
 - Supabase Auth is live.
 - The app now supports Postgres/RLS as the primary scalable workspace backend when `supabase/schema.sql` is applied.
 - Auth metadata remains as a no-downtime fallback while the Postgres migration is not applied.
+- The product now includes a Team surface for workspace identity, staged invitations, members and audit events.
 - Next: execute `supabase/schema.sql` in production and verify the app runs in Postgres mode.
 
 ## 2. Multi-Tenant Product

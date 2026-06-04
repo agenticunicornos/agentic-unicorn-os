@@ -1,8 +1,10 @@
 import {
+  Activity,
   Archive,
   ArrowRight,
   BookOpen,
   BriefcaseBusiness,
+  Building2,
   CalendarDays,
   Check,
   ChevronRight,
@@ -31,18 +33,22 @@ import {
   Timer,
   Trash2,
   User,
+  UserPlus,
+  Users,
   X
 } from "lucide-react";
 import type { Session, User as SupabaseUser } from "@supabase/supabase-js";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { hasSupabaseConfig, supabase } from "./lib/supabase";
 
-type ViewId = "today" | "missions" | "pipelines" | "dossiers" | "brief";
+type ViewId = "today" | "missions" | "pipelines" | "dossiers" | "team" | "brief";
 type MissionId = "product" | "distribution" | "capital" | "ma" | "consulting";
 type Tone = "mint" | "blue" | "amber" | "coral" | "lime";
 type AuthMode = "signin" | "signup";
 type SyncState = "local" | "loading" | "ready" | "saving" | "error";
 type CloudMode = "metadata" | "postgres";
+type OrgRole = "owner" | "admin" | "member" | "viewer";
+type InviteStatus = "pending" | "accepted" | "revoked" | "expired";
 
 type Mission = {
   id: MissionId;
@@ -104,8 +110,73 @@ type DossierNoteRow = {
   body: string;
 };
 
+type OrganizationRow = {
+  id: string;
+  name: string;
+  slug: string | null;
+  owner_id: string;
+  access_state: "active" | "suspended" | "deleted";
+};
+
+type OrganizationMemberRow = {
+  organization_id: string;
+  user_id: string;
+  role: OrgRole;
+  profiles?: {
+    email?: string | null;
+    display_name?: string | null;
+  } | null;
+};
+
+type OrganizationInvitationRow = {
+  id: string;
+  organization_id: string;
+  email: string;
+  role: Exclude<OrgRole, "owner">;
+  status: InviteStatus;
+  created_at: string;
+};
+
+type AuditEventRow = {
+  id: string;
+  action: string;
+  entity_type: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+};
+
 type WorkspaceAction = Action & {
   done?: boolean;
+};
+
+type WorkspaceOrg = {
+  id: string;
+  name: string;
+  slug: string;
+  role: OrgRole;
+  accessState: "active" | "suspended" | "deleted";
+};
+
+type WorkspaceMember = {
+  id: string;
+  email: string;
+  role: OrgRole;
+};
+
+type WorkspaceInvite = {
+  id: string;
+  email: string;
+  role: Exclude<OrgRole, "owner">;
+  status: InviteStatus;
+  createdAt: string;
+};
+
+type WorkspaceAuditEvent = {
+  id: string;
+  action: string;
+  entity: string;
+  detail: string;
+  createdAt: string;
 };
 
 type CloudWorkspace = {
@@ -113,6 +184,10 @@ type CloudWorkspace = {
   actions: WorkspaceAction[];
   pipelines: Record<string, PipelineRow[]>;
   notes: Record<string, string>;
+  organization: WorkspaceOrg;
+  members: WorkspaceMember[];
+  invitations: WorkspaceInvite[];
+  auditEvents: WorkspaceAuditEvent[];
   updatedAt: string;
 };
 
@@ -121,6 +196,7 @@ const views: Array<{ id: ViewId; label: string; icon: ReactNode }> = [
   { id: "missions", label: "Missions", icon: <Layers3 /> },
   { id: "pipelines", label: "Pipelines", icon: <GitBranch /> },
   { id: "dossiers", label: "Dossiers", icon: <FileText /> },
+  { id: "team", label: "Team", icon: <Users /> },
   { id: "brief", label: "Brief", icon: <BookOpen /> }
 ];
 
@@ -331,6 +407,10 @@ export function App() {
   const [localPipelines, setLocalPipelines] = useState<Record<string, PipelineRow[]>>(() => storage.get("auos:pipelineRows", makeDefaultPipelines()));
   const [cloudPipelines, setCloudPipelines] = useState<Record<string, PipelineRow[]>>(makeDefaultPipelines);
   const [dossierNotes, setDossierNotes] = useState<Record<string, string>>(() => storage.get("auos:dossierNotes", {}));
+  const [organization, setOrganization] = useState<WorkspaceOrg>(() => makeDefaultOrganization());
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
+  const [invitations, setInvitations] = useState<WorkspaceInvite[]>([]);
+  const [auditEvents, setAuditEvents] = useState<WorkspaceAuditEvent[]>([]);
   const [commandOpen, setCommandOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [toast, setToast] = useState("");
@@ -418,6 +498,10 @@ export function App() {
         setDone(actionDoneMap(workspace.actions));
         setCloudPipelines(workspace.pipelines);
         setDossierNotes(workspace.notes);
+        setOrganization(workspace.organization);
+        setMembers(workspace.members);
+        setInvitations(workspace.invitations);
+        setAuditEvents(workspace.auditEvents);
 
         if (!postgresWorkspace && !existing) {
           const { data, error } = await db.auth.updateUser({
@@ -466,13 +550,21 @@ export function App() {
     nextActions = cloudActions,
     nextDone = done,
     nextPipelines = cloudPipelines,
-    nextNotes = dossierNotes
+    nextNotes = dossierNotes,
+    nextOrganization = organization,
+    nextMembers = members,
+    nextInvitations = invitations,
+    nextAuditEvents = auditEvents
   ): CloudWorkspace {
     return {
       version: 1,
       actions: nextActions.map((action) => ({ ...action, done: Boolean(nextDone[action.id]) })),
       pipelines: nextPipelines,
       notes: nextNotes,
+      organization: nextOrganization,
+      members: nextMembers,
+      invitations: nextInvitations,
+      auditEvents: nextAuditEvents.slice(0, 50),
       updatedAt: new Date().toISOString()
     };
   }
@@ -915,6 +1007,124 @@ export function App() {
     }
   }
 
+  async function updateOrganization(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const name = String(data.get("name") ?? "").trim();
+    if (!name) return;
+
+    const nextOrganization = {
+      ...organization,
+      name,
+      slug: slugify(name)
+    };
+    const nextAuditEvents = addAuditEvent(auditEvents, "organization.updated", "organization", name);
+
+    setOrganization(nextOrganization);
+    setAuditEvents(nextAuditEvents);
+
+    if (isCloud && supabase && user && cloudMode === "postgres" && !organization.id.startsWith("local-")) {
+      setSyncState("saving");
+      setSyncError("");
+      const { error } = await supabase
+        .from("organizations")
+        .update({ name: nextOrganization.name, slug: nextOrganization.slug })
+        .eq("id", organization.id);
+
+      if (error) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Workspace not updated");
+        return;
+      }
+
+      await recordPostgresAudit("organization.updated", "organization", nextOrganization.name);
+      setSyncState("ready");
+      flash("Workspace updated");
+      return;
+    }
+
+    if (isCloud && supabase) {
+      if (await persistWorkspace(makeWorkspaceSnapshot(cloudActions, done, cloudPipelines, dossierNotes, nextOrganization, members, invitations, nextAuditEvents))) {
+        flash("Workspace updated");
+      }
+      return;
+    }
+
+    flash("Workspace updated locally");
+  }
+
+  async function inviteMember(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const email = String(data.get("email") ?? "").trim().toLowerCase();
+    const role = String(data.get("role") ?? "member") as Exclude<OrgRole, "owner">;
+    if (!email || !email.includes("@")) return;
+
+    const invitation: WorkspaceInvite = {
+      id: makeId("invite"),
+      email,
+      role: role === "admin" || role === "viewer" ? role : "member",
+      status: "pending",
+      createdAt: new Date().toISOString()
+    };
+    const nextInvitations = [invitation, ...invitations].slice(0, 100);
+    const nextAuditEvents = addAuditEvent(auditEvents, "invitation.created", "invitation", email);
+
+    setInvitations(nextInvitations);
+    setAuditEvents(nextAuditEvents);
+
+    if (isCloud && supabase && user && cloudMode === "postgres" && !organization.id.startsWith("local-")) {
+      setSyncState("saving");
+      setSyncError("");
+      const { error } = await supabase
+        .from("organization_invitations")
+        .insert({
+          organization_id: organization.id,
+          email: invitation.email,
+          role: invitation.role,
+          invited_by: user.id,
+          status: invitation.status
+        });
+
+      if (error) {
+        setSyncState("error");
+        setSyncError(readableError(error));
+        flash("Invite not saved");
+        return;
+      }
+
+      await recordPostgresAudit("invitation.created", "invitation", invitation.email);
+      setSyncState("ready");
+      flash("Invite staged");
+      form.reset();
+      return;
+    }
+
+    if (isCloud && supabase) {
+      if (await persistWorkspace(makeWorkspaceSnapshot(cloudActions, done, cloudPipelines, dossierNotes, organization, members, nextInvitations, nextAuditEvents))) {
+        flash("Invite staged");
+        form.reset();
+      }
+      return;
+    }
+
+    flash("Invite staged locally");
+    form.reset();
+  }
+
+  async function recordPostgresAudit(action: string, entity: string, detail: string) {
+    if (!supabase || !user) return;
+    await supabase.from("audit_events").insert({
+      organization_id: organization.id.startsWith("local-") ? null : organization.id,
+      actor_id: user.id,
+      action,
+      entity_type: entity,
+      metadata: { detail }
+    });
+  }
+
   const commandItems = useMemo(() => {
     return [
       { title: "Copy weekly brief", meta: "Operator memo", icon: <Copy />, run: copyBrief },
@@ -922,6 +1132,7 @@ export function App() {
       { title: "Missions", meta: "Strategic axes", icon: <Layers3 />, run: () => setView("missions") },
       { title: "Pipelines", meta: "Counterparties", icon: <GitBranch />, run: () => setView("pipelines") },
       { title: "Dossiers", meta: "Living docs", icon: <FileText />, run: () => setView("dossiers") },
+      { title: "Team", meta: "Workspace, roles, invitations", icon: <Users />, run: () => setView("team") },
       ...missions.map((item) => ({
         title: item.label,
         meta: item.mandate,
@@ -1057,6 +1268,17 @@ export function App() {
               note={dossierNotes[dossier.id] ?? ""}
               onActive={setDossierId}
               onSaveNote={saveDossierNote}
+            />
+          )}
+          {view === "team" && (
+            <TeamView
+              organization={organization}
+              members={members}
+              invitations={invitations}
+              auditEvents={auditEvents}
+              mode={cloudMode}
+              onUpdateOrganization={updateOrganization}
+              onInviteMember={inviteMember}
             />
           )}
           {view === "brief" && <BriefView onCopy={copyBrief} />}
@@ -1612,6 +1834,126 @@ function DossiersView({
   );
 }
 
+function TeamView({
+  organization,
+  members,
+  invitations,
+  auditEvents,
+  mode,
+  onUpdateOrganization,
+  onInviteMember
+}: {
+  organization: WorkspaceOrg;
+  members: WorkspaceMember[];
+  invitations: WorkspaceInvite[];
+  auditEvents: WorkspaceAuditEvent[];
+  mode: CloudMode;
+  onUpdateOrganization: (event: FormEvent<HTMLFormElement>) => void;
+  onInviteMember: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <div className="team-view">
+      <section className="team-hero">
+        <div>
+          <div className="section-label">
+            <Building2 />
+            <span>Workspace</span>
+          </div>
+          <h2>{organization.name}</h2>
+          <p>{organization.slug}.agentic-unicorn-os</p>
+        </div>
+        <div className="team-status">
+          <span>{mode === "postgres" ? "Postgres/RLS" : "Auth fallback"}</span>
+          <strong>{organization.accessState}</strong>
+        </div>
+      </section>
+
+      <section className="team-grid">
+        <article className="team-panel">
+          <PanelHeader icon={<Building2 />} label="Organization" meta={organization.role} />
+          <form className="team-form" onSubmit={onUpdateOrganization}>
+            <label>
+              <span>Name</span>
+              <input name="name" defaultValue={organization.name} maxLength={120} />
+            </label>
+            <button type="submit">
+              <Save />
+              Save
+            </button>
+          </form>
+        </article>
+
+        <article className="team-panel">
+          <PanelHeader icon={<UserPlus />} label="Invite" meta="No billing" />
+          <form className="team-form" onSubmit={onInviteMember}>
+            <label>
+              <span>Email</span>
+              <input name="email" type="email" placeholder="operator@company.com" />
+            </label>
+            <label>
+              <span>Role</span>
+              <select name="role" defaultValue="member">
+                <option value="admin">Admin</option>
+                <option value="member">Member</option>
+                <option value="viewer">Viewer</option>
+              </select>
+            </label>
+            <button type="submit">
+              <UserPlus />
+              Stage invite
+            </button>
+          </form>
+        </article>
+
+        <article className="team-panel wide">
+          <PanelHeader icon={<Users />} label="Members" meta={`${members.length} active`} />
+          <div className="team-list">
+            {members.map((member) => (
+              <div className="team-row" key={member.id}>
+                <span className="team-avatar">{member.email.slice(0, 2).toUpperCase()}</span>
+                <div>
+                  <strong>{member.email}</strong>
+                  <small>{member.role}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="team-panel">
+          <PanelHeader icon={<UserPlus />} label="Invitations" meta={`${invitations.length} staged`} />
+          <div className="team-list">
+            {invitations.length === 0 && <p className="empty-state">No invitation staged.</p>}
+            {invitations.map((invite) => (
+              <div className="team-row" key={invite.id}>
+                <span className="team-avatar">{invite.email.slice(0, 2).toUpperCase()}</span>
+                <div>
+                  <strong>{invite.email}</strong>
+                  <small>{invite.role} / {invite.status}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="team-panel">
+          <PanelHeader icon={<Activity />} label="Audit" meta={`${auditEvents.length} events`} />
+          <div className="audit-list">
+            {auditEvents.length === 0 && <p className="empty-state">No audit event yet.</p>}
+            {auditEvents.map((event) => (
+              <div className="audit-row" key={event.id}>
+                <strong>{event.action}</strong>
+                <span>{event.detail}</span>
+                <small>{new Date(event.createdAt).toLocaleString()}</small>
+              </div>
+            ))}
+          </div>
+        </article>
+      </section>
+    </div>
+  );
+}
+
 function BriefView({ onCopy }: { onCopy: () => void }) {
   return (
     <div className="brief-view">
@@ -1759,21 +2101,114 @@ async function loadPostgresWorkspace(
     throw noteError;
   }
 
+  const collaboration = await loadPostgresCollaboration(currentUser, db);
+
   return {
     version: 1,
     actions: actionRows.map((row) => ({ ...rowToAction(row), done: row.done })),
     pipelines: groupPipelineRows(pipelineItems),
     notes: Object.fromEntries(((noteData ?? []) as DossierNoteRow[]).map((note) => [note.dossier_id, note.body])),
+    organization: collaboration.organization,
+    members: collaboration.members,
+    invitations: collaboration.invitations,
+    auditEvents: collaboration.auditEvents,
     updatedAt: new Date().toISOString()
   };
 }
 
+async function loadPostgresCollaboration(
+  currentUser: SupabaseUser,
+  db: NonNullable<typeof supabase>
+) {
+  const fallback = makeDefaultCollaboration(currentUser.email ?? undefined);
+
+  const organizations = await db
+    .from("organizations")
+    .select("id, name, slug, owner_id, access_state")
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (organizations.error) {
+    if (isMissingPostgresWorkspace(organizations.error)) return fallback;
+    throw organizations.error;
+  }
+
+  let organizationRow = ((organizations.data ?? []) as OrganizationRow[])[0];
+  if (!organizationRow) {
+    const created = await db
+      .from("organizations")
+      .insert({
+        name: fallback.organization.name,
+        slug: fallback.organization.slug,
+        owner_id: currentUser.id
+      })
+      .select("id, name, slug, owner_id, access_state")
+      .single();
+
+    if (created.error) throw created.error;
+    organizationRow = created.data as OrganizationRow;
+  }
+
+  const membersResult = await db
+    .from("organization_members")
+    .select("organization_id, user_id, role, profiles(email, display_name)")
+    .eq("organization_id", organizationRow.id)
+    .order("created_at", { ascending: true });
+
+  if (membersResult.error) throw membersResult.error;
+
+  const invitationsResult = await db
+    .from("organization_invitations")
+    .select("id, organization_id, email, role, status, created_at")
+    .eq("organization_id", organizationRow.id)
+    .order("created_at", { ascending: false });
+
+  if (invitationsResult.error) throw invitationsResult.error;
+
+  const auditResult = await db
+    .from("audit_events")
+    .select("id, action, entity_type, metadata, created_at")
+    .eq("organization_id", organizationRow.id)
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  if (auditResult.error) throw auditResult.error;
+
+  return {
+    organization: organizationFromRow(organizationRow, currentUser.id),
+    members: ((membersResult.data ?? []) as OrganizationMemberRow[]).map((member) => ({
+      id: member.user_id,
+      email: member.profiles?.email ?? currentUser.email ?? "operator",
+      role: member.role
+    })),
+    invitations: ((invitationsResult.data ?? []) as OrganizationInvitationRow[]).map((invite) => ({
+      id: invite.id,
+      email: invite.email,
+      role: invite.role,
+      status: invite.status,
+      createdAt: invite.created_at
+    })),
+    auditEvents: ((auditResult.data ?? []) as AuditEventRow[]).map((event) => ({
+      id: event.id,
+      action: event.action,
+      entity: event.entity_type,
+      detail: String(event.metadata?.detail ?? event.entity_type),
+      createdAt: event.created_at
+    }))
+  };
+}
+
 function makeInitialWorkspace(): CloudWorkspace {
+  const collaboration = makeDefaultCollaboration();
   return {
     version: 1,
     actions: seedActions.map((action) => ({ ...action, done: false })),
     pipelines: makeDefaultPipelines(),
     notes: {},
+    organization: collaboration.organization,
+    members: collaboration.members,
+    invitations: collaboration.invitations,
+    auditEvents: collaboration.auditEvents,
     updatedAt: new Date().toISOString()
   };
 }
@@ -1788,6 +2223,10 @@ function normalizeWorkspace(value: unknown): CloudWorkspace | null {
     actions: normalizeWorkspaceActions(workspace.actions, initial.actions),
     pipelines: normalizePipelines(workspace.pipelines, initial.pipelines),
     notes: normalizeNotes(workspace.notes),
+    organization: normalizeOrganization(workspace.organization, initial.organization),
+    members: normalizeMembers(workspace.members, initial.members),
+    invitations: normalizeInvitations(workspace.invitations),
+    auditEvents: normalizeAuditEvents(workspace.auditEvents),
     updatedAt: typeof workspace.updatedAt === "string" ? workspace.updatedAt : new Date().toISOString()
   };
 }
@@ -1849,6 +2288,116 @@ function normalizeNotes(value: unknown) {
   );
 }
 
+function makeDefaultOrganization(email = "operator"): WorkspaceOrg {
+  return {
+    id: "local-default-org",
+    name: "AGU.OS Workspace",
+    slug: "agu-os-workspace",
+    role: "owner",
+    accessState: "active"
+  };
+}
+
+function makeDefaultCollaboration(email = "operator") {
+  return {
+    organization: makeDefaultOrganization(email),
+    members: [{
+      id: "local-owner",
+      email,
+      role: "owner" as OrgRole
+    }],
+    invitations: [] as WorkspaceInvite[],
+    auditEvents: [] as WorkspaceAuditEvent[]
+  };
+}
+
+function organizationFromRow(row: OrganizationRow, userId: string): WorkspaceOrg {
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug ?? slugify(row.name),
+    role: row.owner_id === userId ? "owner" : "member",
+    accessState: row.access_state
+  };
+}
+
+function normalizeOrganization(value: unknown, fallback: WorkspaceOrg): WorkspaceOrg {
+  if (!value || typeof value !== "object") return fallback;
+  const organization = value as Partial<WorkspaceOrg>;
+  const name = typeof organization.name === "string" && organization.name.trim()
+    ? organization.name.trim().slice(0, 120)
+    : fallback.name;
+
+  return {
+    id: typeof organization.id === "string" && organization.id ? organization.id : fallback.id,
+    name,
+    slug: typeof organization.slug === "string" && organization.slug ? organization.slug : slugify(name),
+    role: isOrgRole(organization.role) ? organization.role : fallback.role,
+    accessState: organization.accessState === "suspended" || organization.accessState === "deleted" ? organization.accessState : "active"
+  };
+}
+
+function normalizeMembers(value: unknown, fallback: WorkspaceMember[]) {
+  if (!Array.isArray(value)) return fallback;
+  const members = value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const member = item as Partial<WorkspaceMember>;
+    const email = typeof member.email === "string" && member.email.includes("@") ? member.email : "";
+    if (!email) return [];
+    return [{
+      id: typeof member.id === "string" && member.id ? member.id : makeId("member"),
+      email,
+      role: isOrgRole(member.role) ? member.role : "member"
+    }];
+  });
+  return members.length > 0 ? members : fallback;
+}
+
+function normalizeInvitations(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const invite = item as Partial<WorkspaceInvite>;
+    const email = typeof invite.email === "string" && invite.email.includes("@") ? invite.email : "";
+    if (!email) return [];
+    const role: Exclude<OrgRole, "owner"> = invite.role === "admin" || invite.role === "viewer" ? invite.role : "member";
+    return [{
+      id: typeof invite.id === "string" && invite.id ? invite.id : makeId("invite"),
+      email,
+      role,
+      status: isInviteStatus(invite.status) ? invite.status : "pending",
+      createdAt: typeof invite.createdAt === "string" ? invite.createdAt : new Date().toISOString()
+    }];
+  });
+}
+
+function normalizeAuditEvents(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const event = item as Partial<WorkspaceAuditEvent>;
+    const action = typeof event.action === "string" && event.action ? event.action : "";
+    if (!action) return [];
+    return [{
+      id: typeof event.id === "string" && event.id ? event.id : makeId("audit"),
+      action,
+      entity: typeof event.entity === "string" && event.entity ? event.entity : "workspace",
+      detail: typeof event.detail === "string" ? event.detail : "",
+      createdAt: typeof event.createdAt === "string" ? event.createdAt : new Date().toISOString()
+    }];
+  }).slice(0, 50);
+}
+
+function addAuditEvent(events: WorkspaceAuditEvent[], action: string, entity: string, detail: string) {
+  return [{
+    id: makeId("audit"),
+    action,
+    entity,
+    detail,
+    createdAt: new Date().toISOString()
+  }, ...events].slice(0, 50);
+}
+
 function stripWorkspaceActions(actions: WorkspaceAction[]): Action[] {
   return actions.map(({ done: _done, ...action }) => action);
 }
@@ -1861,11 +2410,28 @@ function isMissionId(value: unknown): value is MissionId {
   return typeof value === "string" && missions.some((mission) => mission.id === value);
 }
 
+function isOrgRole(value: unknown): value is OrgRole {
+  return value === "owner" || value === "admin" || value === "member" || value === "viewer";
+}
+
+function isInviteStatus(value: unknown): value is InviteStatus {
+  return value === "pending" || value === "accepted" || value === "revoked" || value === "expired";
+}
+
 function makeId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function slugify(value: string) {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return slug || "agu-os-workspace";
 }
 
 function rowToAction(row: ActionRow): Action {

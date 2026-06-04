@@ -39,6 +39,8 @@ La posture securite du projet est documentee dans [`SECURITY.md`](SECURITY.md).
 
 La roadmap pour passer du MVP au produit SaaS mondial est dans [`docs/PRODUCTION_ROADMAP.md`](docs/PRODUCTION_ROADMAP.md).
 
+La surface produit inclut maintenant une vue `Team` pour gerer workspace, membres, invitations et audit log sans couche Stripe.
+
 ## App locale
 
 Installer et lancer:
