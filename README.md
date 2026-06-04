@@ -2,6 +2,10 @@
 
 Espace d'execution pour lancer, financer, et optionnellement vendre une startup agentique open source, puis convertir la credibilite en activite de consulting premium.
 
+## Live
+
+Production: https://agentic-unicorn-os.netlify.app
+
 ## Stack produit
 
 - React + TypeScript pour l'interface operator.
