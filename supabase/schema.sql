@@ -252,7 +252,16 @@ create table if not exists public.operator_actions (
 );
 
 alter table public.operator_actions
-add column if not exists organization_id uuid references public.organizations(id) on delete cascade;
+add column if not exists organization_id uuid references public.organizations(id) on delete cascade,
+add column if not exists user_id uuid references auth.users(id) on delete cascade,
+add column if not exists seed_key text,
+add column if not exists mission text not null default 'product',
+add column if not exists title text not null default '',
+add column if not exists leverage text not null default '',
+add column if not exists due text not null default 'Today',
+add column if not exists done boolean not null default false,
+add column if not exists created_at timestamptz not null default now(),
+add column if not exists updated_at timestamptz not null default now();
 
 alter table public.operator_actions enable row level security;
 
@@ -302,7 +311,15 @@ create table if not exists public.pipeline_items (
 );
 
 alter table public.pipeline_items
-add column if not exists organization_id uuid references public.organizations(id) on delete cascade;
+add column if not exists organization_id uuid references public.organizations(id) on delete cascade,
+add column if not exists user_id uuid references auth.users(id) on delete cascade,
+add column if not exists lane text not null default 'podcasts',
+add column if not exists name text not null default '',
+add column if not exists counterparty text not null default '',
+add column if not exists next_step text not null default '',
+add column if not exists signal text not null default '',
+add column if not exists created_at timestamptz not null default now(),
+add column if not exists updated_at timestamptz not null default now();
 
 alter table public.pipeline_items enable row level security;
 
@@ -349,7 +366,12 @@ create table if not exists public.dossier_notes (
 );
 
 alter table public.dossier_notes
-add column if not exists organization_id uuid references public.organizations(id) on delete cascade;
+add column if not exists organization_id uuid references public.organizations(id) on delete cascade,
+add column if not exists user_id uuid references auth.users(id) on delete cascade,
+add column if not exists dossier_id text not null default '00-CEO-MASTERPLAN.md',
+add column if not exists body text not null default '',
+add column if not exists created_at timestamptz not null default now(),
+add column if not exists updated_at timestamptz not null default now();
 
 create unique index if not exists dossier_notes_user_dossier_idx
 on public.dossier_notes (user_id, dossier_id);

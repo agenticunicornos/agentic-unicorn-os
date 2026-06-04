@@ -2157,7 +2157,7 @@ async function loadPostgresCollaboration(
 
   const membersResult = await db
     .from("organization_members")
-    .select("organization_id, user_id, role, profiles(email, display_name)")
+    .select("organization_id, user_id, role")
     .eq("organization_id", organizationRow.id)
     .order("created_at", { ascending: true });
 
@@ -2184,7 +2184,7 @@ async function loadPostgresCollaboration(
     organization: organizationFromRow(organizationRow, currentUser.id),
     members: ((membersResult.data ?? []) as OrganizationMemberRow[]).map((member) => ({
       id: member.user_id,
-      email: member.profiles?.email ?? currentUser.email ?? "operator",
+      email: member.user_id === currentUser.id ? currentUser.email ?? "operator" : "workspace member",
       role: member.role
     })),
     invitations: ((invitationsResult.data ?? []) as OrganizationInvitationRow[]).map((invite) => ({
