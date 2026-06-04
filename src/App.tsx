@@ -103,6 +103,18 @@ type DossierNoteRow = {
   body: string;
 };
 
+type WorkspaceAction = Action & {
+  done?: boolean;
+};
+
+type CloudWorkspace = {
+  version: 1;
+  actions: WorkspaceAction[];
+  pipelines: Record<string, PipelineRow[]>;
+  notes: Record<string, string>;
+  updatedAt: string;
+};
+
 const views: Array<{ id: ViewId; label: string; icon: ReactNode }> = [
   { id: "today", label: "Today", icon: <CalendarDays /> },
   { id: "missions", label: "Missions", icon: <Layers3 /> },
@@ -370,7 +382,11 @@ export function App() {
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
       setAuthMessage("");
-      setSyncState(nextSession ? "loading" : "ready");
+      if (!nextSession) {
+        setSyncState("ready");
+      } else if (_event === "SIGNED_IN") {
+        setSyncState("loading");
+      }
     });
 
     return () => {
@@ -389,77 +405,27 @@ export function App() {
       setSyncState("loading");
       setSyncError("");
       try {
-        let { data: actionData, error: actionError } = await db
-          .from("operator_actions")
-          .select("id, mission, title, leverage, due, done")
-          .order("created_at", { ascending: true });
-
-        if (actionError) throw actionError;
-
-        let actionRows = (actionData ?? []) as ActionRow[];
-        if (actionRows.length === 0) {
-          const inserts = seedActions.map((action) => ({
-            user_id: currentUser.id,
-            seed_key: action.id,
-            mission: action.mission,
-            title: action.title,
-            leverage: action.leverage,
-            due: action.due,
-            done: false
-          }));
-
-          const seeded = await db
-            .from("operator_actions")
-            .insert(inserts)
-            .select("id, mission, title, leverage, due, done")
-            .order("created_at", { ascending: true });
-
-          if (seeded.error) throw seeded.error;
-          actionRows = (seeded.data ?? []) as ActionRow[];
-        }
-
-        let { data: pipelineData, error: pipelineError } = await db
-          .from("pipeline_items")
-          .select("id, lane, name, counterparty, next_step, signal")
-          .order("created_at", { ascending: true });
-
-        if (pipelineError) throw pipelineError;
-
-        let pipelineItems = (pipelineData ?? []) as PipelineItemRow[];
-        if (pipelineItems.length === 0) {
-          const inserts = Object.entries(pipelineSeeds).flatMap(([lane, rows]) =>
-            rows.map((row) => ({
-              user_id: currentUser.id,
-              lane,
-              name: row.name,
-              counterparty: row.counterparty,
-              next_step: row.next,
-              signal: row.signal
-            }))
-          );
-
-          const seeded = await db
-            .from("pipeline_items")
-            .insert(inserts)
-            .select("id, lane, name, counterparty, next_step, signal")
-            .order("created_at", { ascending: true });
-
-          if (seeded.error) throw seeded.error;
-          pipelineItems = (seeded.data ?? []) as PipelineItemRow[];
-        }
-
-        const { data: noteData, error: noteError } = await db
-          .from("dossier_notes")
-          .select("dossier_id, body");
-
-        if (noteError) throw noteError;
+        const existing = normalizeWorkspace(currentUser.user_metadata?.auos_workspace);
+        const workspace = existing ?? makeInitialWorkspace();
 
         if (cancelled) return;
 
-        setCloudActions(actionRows.map(rowToAction));
-        setDone(Object.fromEntries(actionRows.map((row) => [row.id, row.done])));
-        setCloudPipelines(groupPipelineRows(pipelineItems));
-        setDossierNotes(Object.fromEntries(((noteData ?? []) as DossierNoteRow[]).map((note) => [note.dossier_id, note.body])));
+        setCloudActions(stripWorkspaceActions(workspace.actions));
+        setDone(actionDoneMap(workspace.actions));
+        setCloudPipelines(workspace.pipelines);
+        setDossierNotes(workspace.notes);
+
+        if (!existing) {
+          const { data, error } = await db.auth.updateUser({
+            data: { auos_workspace: workspace }
+          });
+
+          if (error) throw error;
+          if (data.user && !cancelled) {
+            setSession((current) => (current ? { ...current, user: data.user } : current));
+          }
+        }
+
         setSyncState("ready");
       } catch (error) {
         if (cancelled) return;
@@ -491,6 +457,46 @@ export function App() {
     document.addEventListener("keydown", listener);
     return () => document.removeEventListener("keydown", listener);
   }, []);
+
+  function makeWorkspaceSnapshot(
+    nextActions = cloudActions,
+    nextDone = done,
+    nextPipelines = cloudPipelines,
+    nextNotes = dossierNotes
+  ): CloudWorkspace {
+    return {
+      version: 1,
+      actions: nextActions.map((action) => ({ ...action, done: Boolean(nextDone[action.id]) })),
+      pipelines: nextPipelines,
+      notes: nextNotes,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async function persistWorkspace(workspace: CloudWorkspace) {
+    if (!supabase) return false;
+
+    setSyncState("saving");
+    setSyncError("");
+
+    const { data, error } = await supabase.auth.updateUser({
+      data: { auos_workspace: workspace }
+    });
+
+    if (error) {
+      setSyncState("error");
+      setSyncError(readableError(error));
+      flash("Workspace not synced");
+      return false;
+    }
+
+    if (data.user) {
+      setSession((current) => (current ? { ...current, user: data.user } : current));
+    }
+    setSyncState("ready");
+    setSyncError("");
+    return true;
+  }
 
   function flash(message: string) {
     setToast(message);
@@ -564,34 +570,16 @@ export function App() {
     };
 
     if (isCloud && supabase && user) {
-      setSyncState("saving");
-      setSyncError("");
-      const { data: inserted, error } = await supabase
-        .from("operator_actions")
-        .insert({
-          user_id: user.id,
-          mission: draft.mission,
-          title: draft.title,
-          leverage: draft.leverage,
-          due: draft.due,
-          done: false
-        })
-        .select("id, mission, title, leverage, due, done")
-        .single();
+      const cloudDraft = { ...draft, id: makeId("action") };
+      const nextActions = [cloudDraft, ...cloudActions];
+      const nextDone = { ...done, [cloudDraft.id]: false };
 
-      if (error || !inserted) {
-        setSyncState("error");
-        setSyncError(readableError(error));
-        flash("Action not saved");
-        return;
+      setCloudActions(nextActions);
+      setDone(nextDone);
+
+      if (await persistWorkspace(makeWorkspaceSnapshot(nextActions, nextDone))) {
+        flash("Action saved");
       }
-
-      const row = inserted as ActionRow;
-      setCloudActions((items) => [rowToAction(row), ...items]);
-      setDone((items) => ({ ...items, [row.id]: row.done }));
-      setSyncState("ready");
-      setSyncError("");
-      flash("Action saved");
     } else {
       setLocalActions((items) => [draft, ...items]);
       flash("Action saved locally");
@@ -602,54 +590,24 @@ export function App() {
 
   async function toggleAction(id: string) {
     const nextValue = !done[id];
-    setDone((items) => ({ ...items, [id]: nextValue }));
+    const nextDone = { ...done, [id]: nextValue };
+    setDone(nextDone);
 
     if (isCloud && supabase) {
-      setSyncState("saving");
-      setSyncError("");
-      const { error } = await supabase
-        .from("operator_actions")
-        .update({ done: nextValue })
-        .eq("id", id);
-
-      if (error) {
-        setDone((items) => ({ ...items, [id]: !nextValue }));
-        setSyncState("error");
-        setSyncError(readableError(error));
-        flash("Action not synced");
-        return;
+      const synced = await persistWorkspace(makeWorkspaceSnapshot(cloudActions, nextDone));
+      if (!synced) {
+        setDone(done);
       }
-
-      setSyncState("ready");
-      setSyncError("");
     }
   }
 
   async function updateAction(nextAction: Action) {
     if (isCloud && supabase) {
-      setSyncState("saving");
-      setSyncError("");
-      const { error } = await supabase
-        .from("operator_actions")
-        .update({
-          mission: nextAction.mission,
-          title: nextAction.title,
-          leverage: nextAction.leverage,
-          due: nextAction.due
-        })
-        .eq("id", nextAction.id);
-
-      if (error) {
-        setSyncState("error");
-        setSyncError(readableError(error));
-        flash("Action not updated");
-        return;
+      const nextActions = cloudActions.map((item) => (item.id === nextAction.id ? nextAction : item));
+      setCloudActions(nextActions);
+      if (await persistWorkspace(makeWorkspaceSnapshot(nextActions))) {
+        flash("Action updated");
       }
-
-      setCloudActions((items) => items.map((item) => (item.id === nextAction.id ? nextAction : item)));
-      setSyncState("ready");
-      setSyncError("");
-      flash("Action updated");
       return;
     }
 
@@ -659,22 +617,15 @@ export function App() {
 
   async function deleteAction(id: string) {
     if (isCloud && supabase) {
-      setSyncState("saving");
-      setSyncError("");
-      const { error } = await supabase.from("operator_actions").delete().eq("id", id);
+      const nextActions = cloudActions.filter((item) => item.id !== id);
+      const nextDone = removeRecordKey(done, id);
 
-      if (error) {
-        setSyncState("error");
-        setSyncError(readableError(error));
-        flash("Action not deleted");
-        return;
+      setCloudActions(nextActions);
+      setDone(nextDone);
+
+      if (await persistWorkspace(makeWorkspaceSnapshot(nextActions, nextDone))) {
+        flash("Action deleted");
       }
-
-      setCloudActions((items) => items.filter((item) => item.id !== id));
-      setDone((items) => removeRecordKey(items, id));
-      setSyncState("ready");
-      setSyncError("");
-      flash("Action deleted");
       return;
     }
 
@@ -703,36 +654,17 @@ export function App() {
     };
 
     if (isCloud && supabase && user) {
-      setSyncState("saving");
-      setSyncError("");
-      const { data: inserted, error } = await supabase
-        .from("pipeline_items")
-        .insert({
-          user_id: user.id,
-          lane: pipeline,
-          name,
-          counterparty,
-          next_step: next,
-          signal
-        })
-        .select("id, lane, name, counterparty, next_step, signal")
-        .single();
+      const cloudDraft = { ...draft, id: makeId("pipeline") };
+      const nextPipelines = {
+        ...cloudPipelines,
+        [cloudDraft.lane]: [cloudDraft, ...(cloudPipelines[cloudDraft.lane] ?? [])]
+      };
 
-      if (error || !inserted) {
-        setSyncState("error");
-        setSyncError(readableError(error));
-        flash("Pipeline item not saved");
-        return;
+      setCloudPipelines(nextPipelines);
+
+      if (await persistWorkspace(makeWorkspaceSnapshot(cloudActions, done, nextPipelines))) {
+        flash("Pipeline saved");
       }
-
-      const row = pipelineRowFromDb(inserted as PipelineItemRow);
-      setCloudPipelines((items) => ({
-        ...items,
-        [row.lane]: [row, ...(items[row.lane] ?? [])]
-      }));
-      setSyncState("ready");
-      setSyncError("");
-      flash("Pipeline saved");
     } else {
       setLocalPipelines((items) => ({
         ...items,
@@ -746,30 +678,11 @@ export function App() {
 
   async function updatePipelineItem(nextRow: PipelineRow) {
     if (isCloud && supabase) {
-      setSyncState("saving");
-      setSyncError("");
-      const { error } = await supabase
-        .from("pipeline_items")
-        .update({
-          lane: nextRow.lane,
-          name: nextRow.name,
-          counterparty: nextRow.counterparty,
-          next_step: nextRow.next,
-          signal: nextRow.signal
-        })
-        .eq("id", nextRow.id);
-
-      if (error) {
-        setSyncState("error");
-        setSyncError(readableError(error));
-        flash("Pipeline item not updated");
-        return;
+      const nextPipelines = replacePipelineRow(cloudPipelines, nextRow);
+      setCloudPipelines(nextPipelines);
+      if (await persistWorkspace(makeWorkspaceSnapshot(cloudActions, done, nextPipelines))) {
+        flash("Pipeline updated");
       }
-
-      setCloudPipelines((items) => replacePipelineRow(items, nextRow));
-      setSyncState("ready");
-      setSyncError("");
-      flash("Pipeline updated");
       return;
     }
 
@@ -779,21 +692,11 @@ export function App() {
 
   async function deletePipelineItem(row: PipelineRow) {
     if (isCloud && supabase) {
-      setSyncState("saving");
-      setSyncError("");
-      const { error } = await supabase.from("pipeline_items").delete().eq("id", row.id);
-
-      if (error) {
-        setSyncState("error");
-        setSyncError(readableError(error));
-        flash("Pipeline item not deleted");
-        return;
+      const nextPipelines = removePipelineRow(cloudPipelines, row);
+      setCloudPipelines(nextPipelines);
+      if (await persistWorkspace(makeWorkspaceSnapshot(cloudActions, done, nextPipelines))) {
+        flash("Pipeline deleted");
       }
-
-      setCloudPipelines((items) => removePipelineRow(items, row));
-      setSyncState("ready");
-      setSyncError("");
-      flash("Pipeline deleted");
       return;
     }
 
@@ -802,32 +705,13 @@ export function App() {
   }
 
   async function saveDossierNote(dossierKey: string, body: string) {
-    setDossierNotes((items) => ({ ...items, [dossierKey]: body }));
+    const nextNotes = { ...dossierNotes, [dossierKey]: body };
+    setDossierNotes(nextNotes);
 
     if (isCloud && supabase && user) {
-      setSyncState("saving");
-      setSyncError("");
-      const { error } = await supabase
-        .from("dossier_notes")
-        .upsert(
-          {
-            user_id: user.id,
-            dossier_id: dossierKey,
-            body
-          },
-          { onConflict: "user_id,dossier_id" }
-        );
-
-      if (error) {
-        setSyncState("error");
-        setSyncError(readableError(error));
-        flash("Note not synced");
-        return;
+      if (await persistWorkspace(makeWorkspaceSnapshot(cloudActions, done, cloudPipelines, nextNotes))) {
+        flash("Note saved");
       }
-
-      setSyncState("ready");
-      setSyncError("");
-      flash("Note saved");
     } else {
       flash("Note saved locally");
     }
@@ -1597,6 +1481,106 @@ function Intel({ icon, title, copy }: { icon: ReactNode; title: string; copy: st
       <p>{copy}</p>
     </div>
   );
+}
+
+function makeInitialWorkspace(): CloudWorkspace {
+  return {
+    version: 1,
+    actions: seedActions.map((action) => ({ ...action, done: false })),
+    pipelines: makeDefaultPipelines(),
+    notes: {},
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function normalizeWorkspace(value: unknown): CloudWorkspace | null {
+  if (!value || typeof value !== "object") return null;
+  const workspace = value as Partial<CloudWorkspace>;
+  const initial = makeInitialWorkspace();
+
+  return {
+    version: 1,
+    actions: normalizeWorkspaceActions(workspace.actions, initial.actions),
+    pipelines: normalizePipelines(workspace.pipelines, initial.pipelines),
+    notes: normalizeNotes(workspace.notes),
+    updatedAt: typeof workspace.updatedAt === "string" ? workspace.updatedAt : new Date().toISOString()
+  };
+}
+
+function normalizeWorkspaceActions(value: unknown, fallback: WorkspaceAction[]) {
+  if (!Array.isArray(value)) return fallback;
+
+  const actions = value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Partial<WorkspaceAction>;
+    const mission = isMissionId(row.mission) ? row.mission : "product";
+    const title = typeof row.title === "string" ? row.title.trim() : "";
+    if (!title) return [];
+
+    return [{
+      id: typeof row.id === "string" && row.id ? row.id : makeId("action"),
+      mission,
+      title: title.slice(0, 160),
+      leverage: typeof row.leverage === "string" ? row.leverage : "",
+      due: typeof row.due === "string" && row.due ? row.due : "Today",
+      done: Boolean(row.done)
+    }];
+  });
+
+  return actions.length > 0 ? actions : fallback;
+}
+
+function normalizePipelines(value: unknown, fallback: Record<string, PipelineRow[]>) {
+  if (!value || typeof value !== "object") return fallback;
+  const next = Object.fromEntries(Object.keys(pipelineSeeds).map((lane) => [lane, []])) as Record<string, PipelineRow[]>;
+
+  Object.entries(value as Record<string, unknown>).forEach(([lane, rows]) => {
+    if (!Array.isArray(rows)) return;
+    next[lane] = rows.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const row = item as Partial<PipelineRow>;
+      const name = typeof row.name === "string" ? row.name.trim() : "";
+      if (!name) return [];
+
+      return [{
+        id: typeof row.id === "string" && row.id ? row.id : makeId("pipeline"),
+        lane: typeof row.lane === "string" && row.lane ? row.lane : lane,
+        name: name.slice(0, 120),
+        counterparty: typeof row.counterparty === "string" ? row.counterparty : "",
+        next: typeof row.next === "string" ? row.next : "",
+        signal: typeof row.signal === "string" ? row.signal : ""
+      }];
+    });
+  });
+
+  return next;
+}
+
+function normalizeNotes(value: unknown) {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+  );
+}
+
+function stripWorkspaceActions(actions: WorkspaceAction[]): Action[] {
+  return actions.map(({ done: _done, ...action }) => action);
+}
+
+function actionDoneMap(actions: WorkspaceAction[]) {
+  return Object.fromEntries(actions.map((action) => [action.id, Boolean(action.done)]));
+}
+
+function isMissionId(value: unknown): value is MissionId {
+  return typeof value === "string" && missions.some((mission) => mission.id === value);
+}
+
+function makeId(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function rowToAction(row: ActionRow): Action {
