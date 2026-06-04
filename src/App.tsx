@@ -487,7 +487,13 @@ export function App() {
       setSyncState("loading");
       setSyncError("");
       try {
-        const postgresWorkspace = await loadPostgresWorkspace(currentUser, db);
+        let postgresWorkspace: CloudWorkspace | null = null;
+        try {
+          postgresWorkspace = await loadPostgresWorkspace(currentUser, db);
+        } catch (error) {
+          if (!isMissingPostgresWorkspace(error)) throw error;
+        }
+
         const existing = postgresWorkspace ?? normalizeWorkspace(currentUser.user_metadata?.auos_workspace);
         const workspace = existing ?? makeInitialWorkspace();
 
