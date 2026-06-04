@@ -134,7 +134,7 @@ type OrganizationInvitationRow = {
   email: string;
   role: Exclude<OrgRole, "owner">;
   status: InviteStatus;
-  created_at: string;
+  created_at?: string;
 };
 
 type AuditEventRow = {
@@ -142,7 +142,7 @@ type AuditEventRow = {
   action: string;
   entity_type: string;
   metadata: Record<string, unknown> | null;
-  created_at: string;
+  created_at?: string;
 };
 
 type WorkspaceAction = Action & {
@@ -492,7 +492,7 @@ export function App() {
           postgresWorkspace = await loadPostgresWorkspace(currentUser, db);
         } catch (error) {
           rememberPostgresFallback("workspace", error);
-          throw error;
+          if (!isMissingPostgresWorkspace(error)) throw error;
         }
 
         const existing = postgresWorkspace ?? normalizeWorkspace(currentUser.user_metadata?.auos_workspace);
@@ -2036,13 +2036,12 @@ async function loadPostgresWorkspace(
 ): Promise<CloudWorkspace | null> {
   let { data: actionData, error: actionError } = await db
     .from("operator_actions")
-    .select("id, mission, title, leverage, due, done")
-    .order("created_at", { ascending: true });
+    .select("id, mission, title, leverage, due, done");
 
   if (actionError) {
     if (isMissingPostgresWorkspace(actionError)) {
       rememberPostgresFallback("actions", actionError);
-      throw actionError;
+      return null;
     }
     throw actionError;
   }
@@ -2062,8 +2061,7 @@ async function loadPostgresWorkspace(
     const seeded = await db
       .from("operator_actions")
       .insert(inserts)
-      .select("id, mission, title, leverage, due, done")
-      .order("created_at", { ascending: true });
+      .select("id, mission, title, leverage, due, done");
 
     if (seeded.error) throw seeded.error;
     actionRows = (seeded.data ?? []) as ActionRow[];
@@ -2071,13 +2069,12 @@ async function loadPostgresWorkspace(
 
   let { data: pipelineData, error: pipelineError } = await db
     .from("pipeline_items")
-    .select("id, lane, name, counterparty, next_step, signal")
-    .order("created_at", { ascending: true });
+    .select("id, lane, name, counterparty, next_step, signal");
 
   if (pipelineError) {
     if (isMissingPostgresWorkspace(pipelineError)) {
       rememberPostgresFallback("pipeline", pipelineError);
-      throw pipelineError;
+      return null;
     }
     throw pipelineError;
   }
@@ -2098,8 +2095,7 @@ async function loadPostgresWorkspace(
     const seeded = await db
       .from("pipeline_items")
       .insert(inserts)
-      .select("id, lane, name, counterparty, next_step, signal")
-      .order("created_at", { ascending: true });
+      .select("id, lane, name, counterparty, next_step, signal");
 
     if (seeded.error) throw seeded.error;
     pipelineItems = (seeded.data ?? []) as PipelineItemRow[];
@@ -2112,7 +2108,7 @@ async function loadPostgresWorkspace(
   if (noteError) {
     if (isMissingPostgresWorkspace(noteError)) {
       rememberPostgresFallback("notes", noteError);
-      throw noteError;
+      return null;
     }
     throw noteError;
   }
@@ -2141,7 +2137,6 @@ async function loadPostgresCollaboration(
   const organizations = await db
     .from("organizations")
     .select("id, name, slug, owner_id, access_state")
-    .order("created_at", { ascending: true })
     .limit(1);
 
   if (organizations.error) {
@@ -2168,24 +2163,21 @@ async function loadPostgresCollaboration(
   const membersResult = await db
     .from("organization_members")
     .select("organization_id, user_id, role")
-    .eq("organization_id", organizationRow.id)
-    .order("created_at", { ascending: true });
+    .eq("organization_id", organizationRow.id);
 
   if (membersResult.error) throw membersResult.error;
 
   const invitationsResult = await db
     .from("organization_invitations")
-    .select("id, organization_id, email, role, status, created_at")
-    .eq("organization_id", organizationRow.id)
-    .order("created_at", { ascending: false });
+    .select("id, organization_id, email, role, status")
+    .eq("organization_id", organizationRow.id);
 
   if (invitationsResult.error) throw invitationsResult.error;
 
   const auditResult = await db
     .from("audit_events")
-    .select("id, action, entity_type, metadata, created_at")
+    .select("id, action, entity_type, metadata")
     .eq("organization_id", organizationRow.id)
-    .order("created_at", { ascending: false })
     .limit(50);
 
   if (auditResult.error) throw auditResult.error;
@@ -2202,14 +2194,14 @@ async function loadPostgresCollaboration(
       email: invite.email,
       role: invite.role,
       status: invite.status,
-      createdAt: invite.created_at
+      createdAt: invite.created_at ?? new Date().toISOString()
     })),
     auditEvents: ((auditResult.data ?? []) as AuditEventRow[]).map((event) => ({
       id: event.id,
       action: event.action,
       entity: event.entity_type,
       detail: String(event.metadata?.detail ?? event.entity_type),
-      createdAt: event.created_at
+      createdAt: event.created_at ?? new Date().toISOString()
     }))
   };
 }
