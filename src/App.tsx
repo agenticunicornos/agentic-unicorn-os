@@ -491,7 +491,7 @@ export function App() {
         try {
           postgresWorkspace = await loadPostgresWorkspace(currentUser, db);
         } catch (error) {
-          console.warn("Postgres workspace fallback", error);
+          console.error("Postgres workspace fallback", error);
           if (!isMissingPostgresWorkspace(error)) throw error;
         }
 
