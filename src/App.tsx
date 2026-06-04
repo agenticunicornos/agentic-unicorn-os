@@ -492,7 +492,7 @@ export function App() {
           postgresWorkspace = await loadPostgresWorkspace(currentUser, db);
         } catch (error) {
           rememberPostgresFallback("workspace", error);
-          if (!isMissingPostgresWorkspace(error)) throw error;
+          throw error;
         }
 
         const existing = postgresWorkspace ?? normalizeWorkspace(currentUser.user_metadata?.auos_workspace);
