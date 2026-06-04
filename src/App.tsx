@@ -491,7 +491,7 @@ export function App() {
         try {
           postgresWorkspace = await loadPostgresWorkspace(currentUser, db);
         } catch (error) {
-          console.error("Postgres workspace fallback", error);
+          rememberPostgresFallback("workspace", error);
           if (!isMissingPostgresWorkspace(error)) throw error;
         }
 
@@ -2041,7 +2041,7 @@ async function loadPostgresWorkspace(
 
   if (actionError) {
     if (isMissingPostgresWorkspace(actionError)) {
-      console.error("Postgres actions fallback", actionError);
+      rememberPostgresFallback("actions", actionError);
       return null;
     }
     throw actionError;
@@ -2076,7 +2076,7 @@ async function loadPostgresWorkspace(
 
   if (pipelineError) {
     if (isMissingPostgresWorkspace(pipelineError)) {
-      console.error("Postgres pipeline fallback", pipelineError);
+      rememberPostgresFallback("pipeline", pipelineError);
       return null;
     }
     throw pipelineError;
@@ -2111,7 +2111,7 @@ async function loadPostgresWorkspace(
 
   if (noteError) {
     if (isMissingPostgresWorkspace(noteError)) {
-      console.error("Postgres notes fallback", noteError);
+      rememberPostgresFallback("notes", noteError);
       return null;
     }
     throw noteError;
@@ -2519,6 +2519,14 @@ function readableError(error: unknown) {
     return String((error as { message?: unknown }).message ?? "Database action failed.");
   }
   return "Database action failed.";
+}
+
+function rememberPostgresFallback(scope: string, error: unknown) {
+  try {
+    window.localStorage.setItem("auos_postgres_fallback", `${scope}: ${readableError(error)}`);
+  } catch {
+    // Diagnostics only. Never block the workspace.
+  }
 }
 
 function isMissingPostgresWorkspace(error: unknown) {
