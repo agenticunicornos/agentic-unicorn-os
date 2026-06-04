@@ -88,11 +88,12 @@ svg {
 }
 
 .mark {
-  width: 42px;
+  width: 50px;
   height: 42px;
   border-color: var(--line-2);
   background: var(--text);
   color: #0a0a0b;
+  font-size: 10px;
   font-weight: 850;
 }
 
@@ -935,12 +936,13 @@ kbd {
 
 .auth-mark {
   display: grid;
-  width: 48px;
+  width: 82px;
   height: 48px;
   place-items: center;
   border-radius: var(--radius);
   background: var(--text);
   color: var(--bg);
+  font-size: 14px;
   font-weight: 900;
 }
 

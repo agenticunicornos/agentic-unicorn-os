@@ -2,15 +2,15 @@
 
 Espace d'execution pour lancer, financer, et optionnellement vendre une startup agentique open source, puis convertir la credibilite en activite de consulting premium.
 
-## Live
+## Live app
 
-Production: https://agentic-unicorn-os.netlify.app
+Production: [agentic-unicorn-os.netlify.app](https://agentic-unicorn-os.netlify.app)
 
 ## Stack produit
 
 - React + TypeScript pour l'interface operator.
-- Supabase Auth pour les comptes utilisateurs.
-- Supabase Postgres + Row Level Security pour les actions, pipelines et notes par utilisateur.
+- Supabase Auth pour les comptes utilisateurs et le workspace cloud par utilisateur.
+- Supabase user metadata pour persister actions, pipelines et notes sans bloquer l'app sur une migration SQL.
 - Vite pour le build rapide.
 - Lucide React pour les icones produit.
 - Netlify pour la production.
@@ -18,16 +18,18 @@ Production: https://agentic-unicorn-os.netlify.app
 
 ## Backend Supabase
 
-Le schema SQL est dans `supabase/schema.sql`.
+La production utilise Supabase Auth et attache le workspace a l'utilisateur connecte.
 
-Tables principales:
+Le schema SQL optionnel est dans `supabase/schema.sql` pour une evolution Postgres/RLS plus avancee:
 
 - `operator_actions`: actions utilisateur, statut done, mission liee.
 - `pipeline_items`: pipelines Podcasts, Investors, Offers, Acquirers, Consulting.
 - `dossier_notes`: notes personnelles par dossier.
 - `profiles`: profil lie a `auth.users`.
 
-Chaque table active RLS et limite les donnees a `auth.uid()`.
+## Securite
+
+La posture securite du projet est documentee dans [`SECURITY.md`](SECURITY.md).
 
 ## App locale
 

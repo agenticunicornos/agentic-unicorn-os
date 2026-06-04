@@ -759,7 +759,7 @@ export function App() {
   return (
     <div className="app-shell">
       <aside className="rail">
-        <button className="mark" aria-label="Agentic Unicorn OS" onClick={() => setView("today")}>AU</button>
+        <button className="mark" aria-label="Agentic Unicorn OS" onClick={() => setView("today")}>AGU.OS</button>
         <nav className="rail-nav" aria-label="Primary">
           {views.map((item) => (
             <button
@@ -920,7 +920,7 @@ function AuthScreen({
   return (
     <main className="auth-screen">
       <section className="auth-card">
-        <div className="auth-mark">AU</div>
+        <div className="auth-mark">AGU.OS</div>
         <div>
           <p className="kicker">Agentic Unicorn OS</p>
           <h1>{mode === "signin" ? "Sign in" : "Create account"}</h1>
@@ -970,7 +970,7 @@ function LoadingScreen() {
   return (
     <main className="auth-screen">
       <section className="auth-card compact-auth">
-        <div className="auth-mark">AU</div>
+        <div className="auth-mark">AGU.OS</div>
         <p className="kicker">Agentic Unicorn OS</p>
         <h1>Loading workspace</h1>
       </section>
