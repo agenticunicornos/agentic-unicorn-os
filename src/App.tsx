@@ -2042,7 +2042,7 @@ async function loadPostgresWorkspace(
   if (actionError) {
     if (isMissingPostgresWorkspace(actionError)) {
       rememberPostgresFallback("actions", actionError);
-      return null;
+      throw actionError;
     }
     throw actionError;
   }
@@ -2077,7 +2077,7 @@ async function loadPostgresWorkspace(
   if (pipelineError) {
     if (isMissingPostgresWorkspace(pipelineError)) {
       rememberPostgresFallback("pipeline", pipelineError);
-      return null;
+      throw pipelineError;
     }
     throw pipelineError;
   }
@@ -2112,7 +2112,7 @@ async function loadPostgresWorkspace(
   if (noteError) {
     if (isMissingPostgresWorkspace(noteError)) {
       rememberPostgresFallback("notes", noteError);
-      return null;
+      throw noteError;
     }
     throw noteError;
   }
