@@ -954,12 +954,12 @@ function AuthScreen({
         <div>
           <Database />
           <strong>Supabase backend</strong>
-          <span>Actions, pipelines and notes are saved in Postgres.</span>
+          <span>Actions, pipelines and notes are saved to the authenticated workspace.</span>
         </div>
         <div>
           <ShieldCheck />
-          <strong>RLS enabled</strong>
-          <span>User data is scoped by auth uid.</span>
+          <strong>User scoped</strong>
+          <span>Each workspace is attached to the signed-in Supabase user.</span>
         </div>
       </aside>
     </main>
