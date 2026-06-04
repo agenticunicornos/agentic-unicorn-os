@@ -1,0 +1,4 @@
+show_name,host,audience,fit_score_1_5,status,first_contact_date,last_contact_date,next_action_date,cta,target_episode_angle,notes
+Podcast IA #1,Host A,CTO + Founders,5,target,2026-02-20,2026-02-20,2026-02-24,Demo call,Production reliability for agents,Personnaliser le mail avec un cas client
+Podcast IA #2,Host B,Operators + Product,4,target,2026-02-20,2026-02-20,2026-02-25,Trial signup,From POC to revenue with AI agents,Proposer 3 talking points clairs
+Podcast IA #3,Host C,Investors + Builders,4,target,2026-02-20,2026-02-20,2026-02-26,Newsletter signup,Open source distribution as go-to-market moat,Demander créneau sur 2 semaines

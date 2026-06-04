@@ -1,0 +1,4 @@
+account,decision_maker,engagement_type,deal_value_usd,status,last_contact_date,next_action_date,close_probability_0_1,notes
+Enterprise A,COO,Audit + Build sprint,95000,target,2026-02-20,2026-02-27,0.35,Qualifier sponsor exécutif et budget
+Enterprise B,CTO,Advisory monthly,18000,target,2026-02-20,2026-02-28,0.45,Proposer cadrage 90 jours
+Enterprise C,Head of Ops,AI rollout program,140000,target,2026-02-20,2026-03-01,0.25,Envoyer SOW et planning

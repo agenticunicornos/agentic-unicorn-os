@@ -1,0 +1,4 @@
+investor_firm,partner,stage_fit,thesis_fit_1_5,warm_intro,status,last_contact_date,next_action_date,target_check_usd,notes
+Fund A,Partner 1,Seed,5,Founder intro,target,2026-02-20,2026-02-24,1500000,Envoyer update + KPI 12 semaines
+Fund B,Partner 2,Series A,4,Operator intro,target,2026-02-20,2026-02-25,3000000,Book meeting 30 min + deck
+Fund C,Partner 3,Seed,4,Customer intro,target,2026-02-20,2026-02-26,1000000,Partager étude de cas et data room lite
