@@ -9,3 +9,6 @@ coverage/
 .vite/
 agentic-unicorn-os-github-key
 agentic-unicorn-os-github-key.pub
+*.zip
+*.command
+push_to_github.sh
