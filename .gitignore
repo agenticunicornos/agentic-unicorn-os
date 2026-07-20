@@ -13,3 +13,7 @@ agentic-unicorn-os-github-key.pub
 *.zip
 *.command
 push_to_github.sh
+
+# Local Netlify folder
+.netlify
+supabase/.temp/

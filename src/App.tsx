@@ -634,7 +634,7 @@ export function App() {
       const token = data.session?.access_token;
       if (!token) throw new Error("Session expired");
 
-      const response = await fetch("/.netlify/functions/agent", {
+      const response = await fetch("/api/agent", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,

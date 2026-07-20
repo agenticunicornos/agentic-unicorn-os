@@ -1,13 +1,47 @@
-const MAX_BODY_BYTES = 80_000;
+const MAX_BODY_BYTES = 50_000;
 const MAX_PROMPT_CHARS = 1_200;
+const MAX_OUTPUT_CHARS = 8_000;
+const AUTH_TIMEOUT_MS = 8_000;
+const MODEL_TIMEOUT_MS = 25_000;
 
-exports.handler = async function handler(event) {
-  if (event.httpMethod !== "POST") {
-    return json(405, { error: "Method not allowed" });
+export const config = {
+  path: "/api/agent",
+  method: ["POST", "OPTIONS"],
+  rateLimit: {
+    action: "rate_limit",
+    windowLimit: 10,
+    windowSize: 60,
+    aggregateBy: ["ip", "domain"]
+  }
+};
+
+export default async function handler(request) {
+  const requestOrigin = request.headers.get("origin") || "";
+  const sameOrigin = new URL(request.url).origin;
+  const corsOrigin = requestOrigin && requestOrigin === sameOrigin ? requestOrigin : "";
+
+  if (requestOrigin && !corsOrigin) {
+    return json(403, { error: "Origin not allowed" }, "");
   }
 
-  if (!event.body || event.body.length > MAX_BODY_BYTES) {
-    return json(413, { error: "Request too large" });
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: responseHeaders(corsOrigin, true)
+    });
+  }
+
+  if (request.method !== "POST") {
+    return json(405, { error: "Method not allowed" }, corsOrigin);
+  }
+
+  if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get("content-type") || "")) {
+    return json(415, { error: "Content-Type must be application/json" }, corsOrigin);
+  }
+
+  const rawBody = await request.text();
+  if (!rawBody || new TextEncoder().encode(rawBody).byteLength > MAX_BODY_BYTES) {
+    return json(413, { error: "Request too large" }, corsOrigin);
   }
 
   const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
@@ -19,21 +53,21 @@ exports.handler = async function handler(event) {
     return json(500, { error: "Supabase server config missing" });
   }
 
-  const token = bearerToken(event.headers.authorization || event.headers.Authorization);
+  const token = bearerToken(request.headers.get("authorization"));
   if (!token) {
-    return json(401, { error: "Authentication required" });
+    return json(401, { error: "Authentication required" }, corsOrigin);
   }
 
-  const user = await verifySupabaseUser(supabaseUrl, supabaseAnonKey, token);
+  const user = await verifySupabaseUser(supabaseUrl, supabaseAnonKey, token).catch(() => null);
   if (!user) {
-    return json(401, { error: "Invalid session" });
+    return json(401, { error: "Invalid session" }, corsOrigin);
   }
 
   let payload;
   try {
-    payload = JSON.parse(event.body);
+    payload = JSON.parse(rawBody);
   } catch {
-    return json(400, { error: "Invalid JSON" });
+    return json(400, { error: "Invalid JSON" }, corsOrigin);
   }
 
   const prompt = cleanText(payload.prompt).slice(0, MAX_PROMPT_CHARS);
@@ -41,11 +75,11 @@ exports.handler = async function handler(event) {
   const workspace = compactWorkspace(payload.workspace);
 
   if (!prompt) {
-    return json(400, { error: "Prompt required" });
+    return json(400, { error: "Prompt required" }, corsOrigin);
   }
 
   const agentInput = {
-    user: user.email || user.id,
+    userId: user.id,
     mode,
     prompt,
     workspace
@@ -61,31 +95,52 @@ exports.handler = async function handler(event) {
   try {
     result = await runModel(provider, model, system, agentInput);
   } catch (error) {
+    console.error(JSON.stringify({
+      event: "agent_provider_failure",
+      provider,
+      model,
+      userId: user.id,
+      error: error instanceof Error ? error.message : "unknown"
+    }));
     result = {
-      answer: `${localAgentAnswer(agentInput)}\n\nProvider ${provider} failed: ${error.message || "request failed"}.`,
+      answer: `${localAgentAnswer(agentInput)}\n\nLe fournisseur distant est temporairement indisponible. Une réponse locale sécurisée a été utilisée.`,
       provider,
       local: true
     };
   }
 
   return json(200, {
-    answer: result.answer,
+    answer: cleanText(result.answer).slice(0, MAX_OUTPUT_CHARS),
     model,
     mode,
     provider: result.provider,
     local: result.local
-  });
-};
+  }, corsOrigin);
+}
 
-function json(statusCode, body) {
-  return {
-    statusCode,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*"
-    },
-    body: JSON.stringify(body)
+function json(status, body, corsOrigin = "") {
+  return Response.json(body, {
+    status,
+    headers: responseHeaders(corsOrigin)
+  });
+}
+
+function responseHeaders(corsOrigin, preflight = false) {
+  const headers = {
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Vary": "Origin"
   };
+  if (corsOrigin) headers["Access-Control-Allow-Origin"] = corsOrigin;
+  if (preflight) {
+    headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
+    headers["Access-Control-Allow-Methods"] = "POST, OPTIONS";
+    headers["Access-Control-Max-Age"] = "600";
+  }
+  return headers;
 }
 
 function bearerToken(value) {
@@ -95,12 +150,12 @@ function bearerToken(value) {
 }
 
 async function verifySupabaseUser(supabaseUrl, supabaseAnonKey, token) {
-  const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/auth/v1/user`, {
+  const response = await fetchWithTimeout(`${supabaseUrl.replace(/\/$/, "")}/auth/v1/user`, {
     headers: {
       Authorization: `Bearer ${token}`,
       apikey: supabaseAnonKey
     }
-  });
+  }, AUTH_TIMEOUT_MS);
 
   if (!response.ok) return null;
   return response.json();
@@ -191,7 +246,7 @@ function missingBaseUrl(provider, input) {
 }
 
 async function runOpenAIResponses({ key, model, system, input }) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetchWithTimeout("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${key}`,
@@ -203,7 +258,7 @@ async function runOpenAIResponses({ key, model, system, input }) {
       input: [{ role: "user", content: [{ type: "input_text", text: JSON.stringify(input) }] }],
       max_output_tokens: 900
     })
-  });
+  }, MODEL_TIMEOUT_MS);
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -221,7 +276,7 @@ async function runChatCompletions({ provider, endpoint, key, model, system, inpu
   const headers = { "Content-Type": "application/json" };
   if (key) headers.Authorization = `Bearer ${key}`;
 
-  const response = await fetch(endpoint, {
+  const response = await fetchWithTimeout(endpoint, {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -233,7 +288,7 @@ async function runChatCompletions({ provider, endpoint, key, model, system, inpu
       temperature: 0.3,
       max_tokens: 900
     })
-  });
+  }, MODEL_TIMEOUT_MS);
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -248,7 +303,7 @@ async function runChatCompletions({ provider, endpoint, key, model, system, inpu
 }
 
 async function runOllama({ baseUrl, model, system, input }) {
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/generate`, {
+  const response = await fetchWithTimeout(`${baseUrl.replace(/\/$/, "")}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -256,7 +311,7 @@ async function runOllama({ baseUrl, model, system, input }) {
       prompt: `${system}\n\n${JSON.stringify(input)}`,
       stream: false
     })
-  });
+  }, MODEL_TIMEOUT_MS);
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -310,9 +365,6 @@ function compactWorkspace(value) {
   const pipelines = workspace.pipelines && typeof workspace.pipelines === "object" ? workspace.pipelines : {};
   const notes = workspace.notes && typeof workspace.notes === "object" ? workspace.notes : {};
   const organization = workspace.organization && typeof workspace.organization === "object" ? workspace.organization : {};
-  const invitations = Array.isArray(workspace.invitations) ? workspace.invitations.slice(0, 12) : [];
-  const auditEvents = Array.isArray(workspace.auditEvents) ? workspace.auditEvents.slice(0, 12) : [];
-
   return {
     organization: {
       name: cleanText(organization.name),
@@ -343,10 +395,18 @@ function compactWorkspace(value) {
       Object.entries(notes)
         .slice(0, 8)
         .map(([key, body]) => [key, cleanText(body).slice(0, 600)])
-    ),
-    invitations,
-    auditEvents
+    )
   };
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function extractResponsesText(data) {
